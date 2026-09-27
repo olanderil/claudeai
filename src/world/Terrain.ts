@@ -865,11 +865,14 @@ function createTerrainMaterial(
              float clodVis = 1.0 - smoothstep(0.25, 1.2, fw);
              float c1 = tFbm(wp * 0.075);
              float c2 = tFbm(wp * 0.6);
-             vec3 churned = mix(dark, soil, smoothstep(0.32, 0.72, c1));
-             churned = mix(churned, spoil,
-               smoothstep(0.6, 0.78, c2) * (0.25 + 0.45 * chalk) * clodVis
-               + smoothstep(0.55, 0.8, c1) * chalk * 0.3);
-             churned *= mix(1.0, 0.82 + 0.36 * tNoise(wp * 2.1), clodVis);
+             // Disturbed ground: soil and subsoil turned over together. In
+             // chalk country that is a grey-white porridge; in Flanders, mud.
+             vec3 disturbed = mix(soil, spoil, 0.22 + 0.42 * chalk);
+             vec3 churned = mix(dark * 1.1, disturbed, smoothstep(0.28, 0.68, c1));
+             churned = mix(churned, spoil, smoothstep(0.62, 0.8, c2) * (0.18 + 0.3 * chalk) * clodVis);
+             churned *= mix(1.0, 0.84 + 0.32 * tNoise(wp * 2.1), clodVis);
+             // Wet patches where the water lies.
+             churned = mix(churned, dark * 0.7, smoothstep(0.62, 0.8, lowNoise) * flooded * 0.6);
 
              vec3 weeds = mix(col, mix(uDry * 0.78, uGrass * 0.85, 0.45), 0.6);
              col = mix(col, weeds, blight * 0.75);
@@ -892,7 +895,7 @@ function createTerrainMaterial(
              // Shelling is not even: barrages walk, some ground is hit again and
              // again and some survives. A slow noise lumps the density.
              float dens = bfDensity(u) * craters * mix(0.55, 1.0, bfLump(wp));
-             vec3 avgHole = mix(dark, spoil, 0.3);
+             vec3 avgHole = mix(dark, disturbed, 0.5);
              float farFade = smoothstep(3.0, 14.0, fw);
              col = mix(col, avgHole, dens * 0.3 * farFade);
              if (dens > 0.004 && farFade < 0.999) {
@@ -913,10 +916,13 @@ function createTerrainMaterial(
                  float bowl = 1.0 - smoothstep(0.8, 0.96, bestR);
                  float rim = smoothstep(0.74, 0.92, bestR) * (1.0 - smoothstep(1.02, 1.28, bestR));
                  float ejecta = smoothstep(1.0, 1.18, bestR) * (1.0 - smoothstep(1.25, 1.7, bestR));
-                 vec3 bowlCol = mix(dark * 0.75, soil * 0.95, bestR * bestR);
+                 // Fresh holes in a field show their spoil loud and clear; in
+                 // no-man's-land every rim is just more of the same porridge.
+                 vec3 bowlCol = mix(mix(dark * 0.75, soil * 0.95, bestR * bestR), disturbed * 0.8, chalk * 0.45);
+                 vec3 rimCol = mix(spoil, disturbed * 1.08, churn * 0.75);
                  vec3 cc = col;
-                 cc = mix(cc, spoil, ejecta * (0.22 + 0.4 * chalk) * smoothstep(0.35, 0.75, c2 + 0.25));
-                 cc = mix(cc, mix(spoil, soil, 0.3), rim * (0.4 + 0.3 * chalk) * (0.6 + 0.6 * c2));
+                 cc = mix(cc, rimCol, ejecta * (0.22 + 0.35 * chalk) * smoothstep(0.35, 0.75, c2 + 0.25));
+                 cc = mix(cc, rimCol, rim * (0.55 + 0.3 * chalk) * (0.6 + 0.5 * c2));
                  cc = mix(cc, bowlCol, bowl);
                  float pool = bestWet * (1.0 - smoothstep(0.5, 0.6, bestR));
                  cc = mix(cc, dark * 0.55, bestWet * (1.0 - smoothstep(0.58, 0.74, bestR)) * 0.8);

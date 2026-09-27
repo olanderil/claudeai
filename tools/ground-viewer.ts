@@ -3,6 +3,7 @@ import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { PostFX } from '../src/render/PostFX';
 import { clampSunlight } from '../src/world/SkyClamp';
 import { buildGround, buildKiteBalloon, buildZeppelin, type GroundKind, type ModelRig } from '../src/combat/GroundModels';
+import { groundAtlas } from '../src/combat/ground/atlas';
 
 /**
  * Standalone look-dev viewer for the combat models (GroundModels.ts), lit the
@@ -214,7 +215,18 @@ function frame(): void {
   requestAnimationFrame(frame);
 }
 
-Object.assign(window as unknown as Record<string, unknown>, { show, stats, measure });
+/** Debug: put the atlas (albedo or normal) on screen as a 2D canvas. */
+function atlas(which: 'map' | 'normalMap'): void {
+  const t = groundAtlas()[which];
+  const { width, height, data } = t.image as { width: number; height: number; data: Uint8Array };
+  const c = document.createElement('canvas'); c.width = width; c.height = height;
+  const img = new ImageData(new Uint8ClampedArray(data), width, height);
+  c.getContext('2d')!.putImageData(img, 0, 0);
+  c.style.cssText = 'position:fixed;left:0;top:0;width:1280px;height:640px;z-index:9;background:#f0f';
+  document.body.appendChild(c);
+}
+
+Object.assign(window as unknown as Record<string, unknown>, { show, stats, measure, atlas });
 const params = new URLSearchParams(location.search);
 const initial = params.get('spec');
 show(initial ? (JSON.parse(initial) as Spec) : { kind: 'grid', dist: 220, elev: 40 });
