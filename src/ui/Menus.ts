@@ -176,6 +176,7 @@ export class Menus {
       }
     }
     this.current = id;
+    document.body.classList.add('screen-open');
     const first = this.screens.get(id)?.querySelector<HTMLElement>('.btn.primary, .mission, .btn');
     first?.focus({ preventScroll: true });
   }
@@ -186,6 +187,7 @@ export class Menus {
       s.hidden = true;
     }
     this.current = null;
+    document.body.classList.remove('screen-open');
   }
 
   private button(label: string, fn: () => void, cls = 'btn'): HTMLButtonElement {

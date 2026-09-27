@@ -1213,10 +1213,9 @@ function boot(): void {
   }
 
   function startQuickBattle(fresh = true): void {
-    if (fresh) {
-      world.setTimeOfDay(presetIndex(TIME_PRESETS, 'MORNING', 1));
-      world.prime(new THREE.Vector3(0, 0, 0));
-    }
+    // Quick battle flies over whatever front, hour and weather are set in the
+    // World and Style tabs — the menu's dogfight is a preview of exactly that.
+    if (fresh) world.prime(new THREE.Vector3(0, 0, 0));
     game.setAutopilot(false);
     game.startQuickBattle(menus.team, menus.aircraft);
     if (rig.mode === 'cinematic' || rig.mode === 'director') rig.setMode('chase');
@@ -1244,7 +1243,6 @@ function boot(): void {
 
   /** Watch from the main menu: a quick battle flown by the autopilot. */
   function startWatch(): void {
-    world.setTimeOfDay(presetIndex(TIME_PRESETS, 'GOLDEN', 3));
     world.prime(new THREE.Vector3(0, 0, 0));
     game.startQuickBattle(menus.team, menus.aircraft);
     game.setAutopilot(true);
@@ -1284,7 +1282,6 @@ function boot(): void {
     rig.setMode('cinematic');
     applyTourSpeed();
     introRunning = true;
-    world.setTimeOfDay(presetIndex(TIME_PRESETS, 'GOLDEN', 3));
     overlay.classList.remove('hidden', 'full', 'ready');
     overlay.classList.add('choose');
     document.body.classList.remove('started');
