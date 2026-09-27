@@ -1,0 +1,1593 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>Horizon F18 &mdash; Flight Simulator</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --hud: #7dffb2;
+        /* End of the title sequence — must match the last beat's delay plus
+           its duration. Used only by the no-script fallback that reveals the
+           help panel; main.ts hands over on the last beat's `animationend`. */
+        --titles-end: 14.75s;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 100%; height: 100%; overflow: hidden;
+        background: #05070c;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        color: #dfe7f2;
+      }
+      #scene, #hud {
+        position: fixed; inset: 0; width: 100%; height: 100%;
+        display: block;
+      }
+      #scene { z-index: 0; }
+      #hud { z-index: 1; pointer-events: none; }
+
+      #overlay {
+        position: fixed; inset: 0; z-index: 2;
+        display: flex; align-items: center; justify-content: center;
+        /* Bottom padding keeps the help panel clear of the World / Style /
+           Controls tab bar, which sits above the overlay and would otherwise
+           overlap it on a short viewport. */
+        padding: 20px 16px 66px;
+        /* A scrim, not a backdrop. The attract flight plays behind this, and an
+           opaque background hid it completely — the scene was being rendered
+           the whole time and nobody could see it. */
+        background: radial-gradient(ellipse at 50% 42%,
+          rgba(5, 10, 18, 0.20) 0%, rgba(3, 6, 11, 0.70) 80%);
+        transition: opacity 0.6s ease;
+      }
+      #overlay.hidden { opacity: 0; pointer-events: none; }
+      /* Slightly deeper while the titles play, to hold big type over a moving
+         landscape without hiding the flight that is the whole point of it. */
+      #overlay.intro {
+        background: radial-gradient(ellipse at 50% 46%,
+          rgba(5, 10, 18, 0.26) 0%, rgba(3, 6, 11, 0.76) 84%);
+      }
+
+      /* ---- Logo ------------------------------------------------------------
+         Top left, above everything on the title screen, and it fades out with
+         the overlay because it lives inside it. The mark is an attitude
+         indicator: horizon line, ground below it, waterline aircraft symbol. */
+      /*
+       * Fullscreen toggle. Sits opposite the logo and, like it, stays out of
+       * the way: the whole point of this screen is the view behind it.
+       */
+      #corner-tools {
+        position: absolute; top: 28px; right: 32px;
+        display: flex; gap: 8px;
+        z-index: 8;
+      }
+      .icon-button {
+        width: 38px; height: 38px; padding: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(8, 16, 24, 0.42);
+        border: 1px solid rgba(160, 200, 230, 0.22);
+        border-radius: 9px;
+        color: #dbe9f6;
+        cursor: pointer;
+        transition: background 0.18s ease, border-color 0.18s ease, opacity 0.3s ease;
+      }
+      .icon-button:hover {
+        background: rgba(14, 28, 40, 0.66);
+        border-color: rgba(160, 200, 230, 0.45);
+      }
+      .icon-button svg { width: 17px; height: 17px; display: block; }
+      /*
+       * Recording state lives on the button, because the recording itself must
+       * not contain anything that says so — the capture is the 3D canvas only.
+       */
+      #record.recording {
+        background: rgba(196, 44, 44, 0.72);
+        border-color: rgba(255, 150, 150, 0.6);
+        animation: rec-pulse 1.6s ease-in-out infinite;
+      }
+      @keyframes rec-pulse { 50% { background: rgba(150, 30, 30, 0.72); } }
+      /* ---- Radio ----------------------------------------------------------
+         Hangs under the corner tools it belongs to. Same chrome as the shot
+         picker, because it is the same kind of thing: a list you open, choose
+         from, and dismiss. */
+      #radio-panel {
+        position: fixed; top: 76px; right: 32px; z-index: 8;
+        width: 300px; max-height: calc(100vh - 120px); overflow-y: auto;
+        padding: 14px 15px 12px;
+        background: rgba(6, 14, 20, 0.94);
+        border: 1px solid rgba(160, 200, 230, 0.24);
+        border-radius: 11px; backdrop-filter: blur(14px);
+      }
+      #radio-panel[hidden] { display: none; }
+      #radio-panel::-webkit-scrollbar { width: 6px; }
+      #radio-panel::-webkit-scrollbar-thumb {
+        background: rgba(125, 255, 178, 0.3); border-radius: 3px;
+      }
+      .radio-head {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 10px; margin-bottom: 10px;
+      }
+      .radio-head h4 {
+        font-size: 9px; font-weight: 600; letter-spacing: 0.22em;
+        text-transform: uppercase; color: var(--hud);
+      }
+      #radio-status {
+        font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #62778a;
+      }
+      #radio-status.on { color: var(--hud); }
+      #radio-status.bad { color: #ffb27d; }
+      .radio-station {
+        appearance: none; border: 0; background: transparent; cursor: pointer;
+        font: inherit; width: 100%; text-align: left;
+        display: flex; align-items: baseline; gap: 8px;
+        padding: 6px 8px; border-radius: 6px; color: #b9cbdb; font-size: 12px;
+        transition: background 0.12s ease, color 0.12s ease;
+      }
+      /* The name never wraps — a station called "Deep Space One" broken across
+         two lines stops looking like one station. The description gives way
+         instead, since it is the part you can guess. */
+      .radio-station > span:first-of-type { flex: none; white-space: nowrap; }
+      .radio-station:hover { background: rgba(125, 255, 178, 0.13); color: #fff; }
+      .radio-station.current { background: rgba(125, 255, 178, 0.16); color: var(--hud); }
+      .radio-station .blurb {
+        margin-left: auto; min-width: 0; text-align: right;
+        font-size: 9px; letter-spacing: 0.04em; color: #62778a; text-transform: uppercase;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .radio-station.current .blurb, .radio-station:hover .blurb { color: #8ba2b5; }
+      /* The playing station carries the transport: clicking it again stops it. */
+      .radio-station.current::before { content: '❚❚'; font-size: 8px; }
+      .radio-station::before { content: '▶'; font-size: 8px; opacity: 0.55; width: 12px; }
+      .radio-file {
+        display: block; margin: 10px 0 4px; cursor: pointer;
+        padding: 8px 10px; border-radius: 6px; font-size: 11px;
+        color: var(--hud); background: rgba(125, 255, 178, 0.1);
+        border: 1px solid rgba(125, 255, 178, 0.35);
+        text-align: center; transition: background 0.15s;
+      }
+      .radio-file:hover { background: rgba(125, 255, 178, 0.2); }
+      .radio-file input { display: none; }
+      #radio-panel .panel-slider { margin: 12px 0 4px; }
+      #radio-panel .panel-note { font-size: 10px; line-height: 1.45; margin-top: 10px; }
+      #radio[aria-expanded="true"] {
+        background: rgba(14, 28, 40, 0.8); border-color: rgba(160, 200, 230, 0.5);
+      }
+      #radio.on { color: var(--hud); border-color: rgba(125, 255, 178, 0.45); }
+
+      /* ---- Director bar ---------------------------------------------------
+         One dark plate carrying the whole control: previous, the running shot,
+         next, and the auto/pinned toggle. Only the director has shots to step
+         through, so nothing else ever sees it. */
+      #director-bar {
+        /* Centred by `margin: auto` between left:0 and right:0, not by a 50%
+           offset. A shrink-to-fit box positioned at `left: 50%` may only be as
+           wide as the space *right* of centre — half the window — so the moment
+           the bar carried the pace and the tour rate together its content was
+           wider than the box: first overflowing it, then wrapping to two rows.
+           Anchoring both edges makes the available width the whole window. */
+        position: fixed; left: 0; right: 0; margin: 0 auto; bottom: 74px;
+        width: max-content; max-width: calc(100vw - 24px);
+        z-index: 5; display: none; align-items: center; gap: 2px; padding: 4px;
+        flex-wrap: wrap; justify-content: center;
+        background: rgba(6, 14, 20, 0.82);
+        border: 1px solid rgba(160, 200, 230, 0.22);
+        border-radius: 11px; backdrop-filter: blur(10px);
+      }
+      body.director #director-bar { display: flex; }
+      /* The cinematic view gets the bar too, cut down to the one control that
+         means anything there: the pace. Everything else on it acts on a single
+         shot, and that camera does not stay on one. */
+      body.cinematic #director-bar { display: flex; }
+      body.cinematic #shot-prev,
+      body.cinematic #shot-next,
+      body.cinematic .bar-name,
+      body.cinematic #shot-pin,
+      body.cinematic #shot-shape-open,
+      body.cinematic #shot-help { display: none; }
+      /* The bar's own dividers belong to the director's layout; only the ones
+         inside the pace group are wanted here. */
+      body.cinematic #director-bar > .bar-split { display: none; }
+      /* …and it carries the pace inline instead. */
+      #pace-bar { display: none; align-items: center; gap: 10px; padding: 0 6px 0 10px; }
+      body.cinematic #pace-bar { display: flex; }
+      body.cinematic #pace-bar .bar-split { display: block; }
+      /* The orbit view borrows the bar as well — it has no shots, so only its
+         own group and the tour rate ever show. */
+      body.orbit #director-bar { display: flex; }
+      body.orbit #shot-prev,
+      body.orbit #shot-next,
+      body.orbit .bar-name,
+      body.orbit #shot-pin,
+      body.orbit #shot-shape-open,
+      body.orbit #shot-help,
+      body.orbit #director-bar > .bar-split { display: none; }
+      #orbit-bar { display: none; align-items: center; gap: 10px; padding: 0 6px 0 4px; }
+      body.orbit #orbit-bar { display: flex; }
+      #orbit-bar .bar-slider input[type="range"] { width: 72px; flex: none; }
+      /* Three readouts of "34 m" do not need the 88px the pace line's
+         "1.00× · 3.2 s" does, and at that width the bar overflows a laptop. */
+      #orbit-bar .bar-slider strong { min-width: 42px; }
+      #orbit-direction { padding: 0 10px; gap: 6px; }
+      #orbit-direction svg { width: 15px; height: 15px; }
+      /* Anticlockwise is the same arrow, mirrored — one icon, two directions. */
+      #orbit-direction.ccw svg { transform: scaleX(-1); }
+      #orbit-direction-label {
+        font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+      }
+
+      /* The free camera takes the bar too — views, a save, and the two toggles
+         that say what the mouse and the camera are doing. */
+      body.free #director-bar { display: flex; }
+      body.free #shot-prev,
+      body.free #shot-next,
+      body.free .bar-name,
+      body.free #shot-pin,
+      body.free #shot-shape-open,
+      body.free #shot-help,
+      body.free #director-bar > .bar-split { display: none; }
+      #free-bar { display: none; align-items: center; gap: 6px; padding: 0 4px; }
+      body.free #free-bar { display: flex; }
+      #free-slots { display: flex; gap: 3px; }
+      /* On the bar the slots are fixed squares rather than the panel's
+         flex-filled row: the bar is sized by its content, so `flex: 1` would
+         let nine buttons collapse to nothing. */
+      #free-slots .slot-button { flex: none; width: 22px; height: 26px; padding: 0; }
+      #free-store { padding: 0 11px; font-size: 9px; }
+      #free-store:not([disabled]) { color: #ffd9a0; }
+      #free-store[disabled] { opacity: 0.35; cursor: default; }
+      #shot-shape-open { padding: 0 12px 0 9px; gap: 7px; }
+      #shot-shape-open svg { width: 15px; height: 15px; }
+      #shot-shape-open span { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; }
+      /* Open is a state worth seeing on the bar — the panel it opens can be
+         behind the aircraft, and the pin it sets is not obviously its doing. */
+      #shot-shape-open[aria-expanded="true"] { background: var(--hud); color: #04120b; }
+      #shot-shape-open[aria-expanded="true"]:hover { background: #9dffc6; color: #04120b; }
+      #free-reframe, #free-lock { padding: 0 10px 0 8px; gap: 6px; font-size: 9px; }
+      /* Same "on" treatment as the director's pin — one filled state across the
+         whole bar, so a lit button always means the same thing. */
+      #free-reframe[aria-pressed="true"] { background: var(--hud); color: #04120b; }
+      #free-reframe[aria-pressed="true"]:hover { background: #9dffc6; color: #04120b; }
+      #free-reframe svg, #free-lock svg { width: 14px; height: 14px; }
+      /* One icon per state rather than two buttons: the glyph is the readout. */
+      #free-lock #free-lock-world { display: none; }
+      #free-lock.world #free-lock-aircraft { display: none; }
+      #free-lock.world #free-lock-world { display: inline; }
+
+      /* Only while a scenic flight is actually flying — the rate means nothing
+         when you have the stick. */
+      #tour-speed { display: none; align-items: center; gap: 8px; }
+      body.touring #tour-speed { display: flex; }
+      .bar-label {
+        font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #8ea3b6;
+      }
+      #pace-styles, #tour-speeds { flex-wrap: nowrap; gap: 3px; }
+      #tour-speeds button { padding: 5px 7px; font-size: 9px; letter-spacing: 0.06em; }
+      #pace-styles button {
+        padding: 5px 9px; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+      }
+      /* A slider small enough to live on a bar: label, track, readout, one row. */
+      .bar-slider {
+        display: flex; align-items: center; gap: 7px; cursor: pointer;
+        font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #8ea3b6;
+      }
+      /* Id-qualified on purpose: the shared track rule below sets `width: 100%`
+         at the same specificity and appears later in the file, so an unqualified
+         `.bar-slider` rule loses to it and the tracks come out 193px wide.
+         `flex: none` keeps the two the same size whatever their readouts say. */
+      #pace-bar .bar-slider input[type="range"] { width: 76px; flex: none; }
+      .bar-slider strong {
+        /* Wide enough for "1.00× · 3.2 s" on one line — wrapping it made the
+           bar two rows tall wherever the readout happened to be longest. */
+        min-width: 88px; white-space: nowrap;
+        font-size: 10px; font-weight: 600; color: #eaf4ff;
+        letter-spacing: 0.04em; text-transform: none;
+      }
+      #shot-transport[hidden] { display: none; }
+      .bar-button, .bar-name {
+        appearance: none; border: 0; background: transparent; cursor: pointer;
+        font: inherit; color: #dbe9f6;
+        height: 30px; border-radius: 7px;
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+      .bar-button { min-width: 30px; padding: 0 7px; gap: 7px; }
+      .bar-button:hover, .bar-name:hover { background: rgba(125, 255, 178, 0.13); color: #fff; }
+      .bar-button svg { width: 15px; height: 15px; display: block; }
+      .bar-name {
+        gap: 8px; padding: 0 8px 0 11px; color: #eaf4ff;
+        font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
+      }
+      .bar-name[aria-expanded="true"] { background: rgba(125, 255, 178, 0.13); }
+      /* Fixed width, not shrink-to-fit: the director cuts on its own clock, and
+         a name that resized the bar would slide the arrows out from under the
+         pointer between one shot and the next. */
+      #shot-name-text {
+        width: 132px; text-align: center;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .bar-name .caret { width: 12px; height: 12px; flex: none; opacity: 0.65; }
+      .bar-name[aria-expanded="true"] .caret { transform: rotate(180deg); opacity: 1; }
+      .bar-split {
+        width: 1px; height: 19px; margin: 0 4px;
+        background: rgba(160, 200, 230, 0.24);
+      }
+      .bar-pin {
+        padding: 0 12px 0 9px;
+        font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+      }
+      /* Pinned is a state, not an action, so it stays lit for as long as it holds. */
+      #shot-pin[aria-pressed="true"] { background: var(--hud); color: #04120b; }
+      #shot-pin[aria-pressed="true"]:hover { background: #9dffc6; color: #04120b; }
+
+      #shot-help[aria-expanded="true"] { background: rgba(125, 255, 178, 0.13); color: #fff; }
+      #shot-keys {
+        position: absolute; right: 0; bottom: calc(100% + 9px);
+        z-index: 6; width: max-content; padding: 12px 15px;
+        background: rgba(6, 14, 20, 0.94);
+        border: 1px solid rgba(160, 200, 230, 0.24);
+        border-radius: 10px; backdrop-filter: blur(14px);
+        display: grid; grid-template-columns: auto auto; gap: 8px 14px; align-items: center;
+      }
+      #shot-keys[hidden] { display: none; }
+      #shot-keys kbd {
+        font: inherit; font-size: 11px; min-width: 24px; text-align: center;
+        padding: 3px 0; border-radius: 5px; color: var(--hud);
+        background: rgba(125, 255, 178, 0.13);
+        border: 1px solid rgba(125, 255, 178, 0.32);
+      }
+      #shot-keys span { font-size: 12px; color: #b9cbdb; white-space: nowrap; }
+
+      /* The two knobs that decide how a shot feels: how long it is held, and
+         how far the camera travels while it is. Same chrome as the key list,
+         and it reuses the panel's own slider and segmented-button styles so
+         there is one set of controls in the game rather than two. */
+      #shot-shape {
+        position: absolute; right: 0; bottom: calc(100% + 9px);
+        z-index: 6; padding: 14px 16px 15px;
+        /* Three columns wide on a desktop; `auto-fit` folds them to two and
+           then one as the window narrows, and `max-width` keeps the panel on
+           screen when it does — it is anchored to the bar's right edge, so an
+           over-wide panel runs off the *left* of the window. */
+        width: min(620px, calc(100vw - 40px));
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
+        gap: 4px 20px; text-align: left;
+        /* On a short window it scrolls rather than running off the top. */
+        max-height: calc(100vh - 150px); overflow-y: auto;
+        background: rgba(6, 14, 20, 0.94);
+        border: 1px solid rgba(160, 200, 230, 0.24);
+        border-radius: 10px; backdrop-filter: blur(14px);
+        text-align: left;
+      }
+      #shot-shape[hidden] { display: none; }
+      /* The cinematic view shows only the first column — a panel still sized
+         for three would stretch two sliders across six hundred pixels. */
+      body.cinematic #shot-shape { width: min(268px, calc(100vw - 40px)); }
+      .shape-col { min-width: 0; display: flex; flex-direction: column; }
+      #shot-transport[hidden], #shot-slots-block[hidden] { display: none; }
+      /* The buttons column is a stack of equals rather than a row plus a
+         full-width one, so Replay and Loop no longer read as a pair with Reset
+         hanging underneath them. */
+      #shot-transport .panel-button { margin-top: 0; margin-bottom: 6px; }
+      /* ---- The shot editor, in the bar's own idiom -------------------------
+         It grew out of the bottom panel's controls and looked it: 11-12px
+         sentence-case labels, filled green buttons, full-size slider grips —
+         next to the bar it hangs off, two different products. Everything below
+         is the bar's vocabulary at panel scale: 9px letter-spaced uppercase for
+         anything that names a thing, a bright readout for anything that states
+         a value, and quiet outlined controls that only fill in when they are
+         actually on. */
+      #shot-shape h4 {
+        font-size: 9px; font-weight: 600; letter-spacing: 0.14em;
+        text-transform: uppercase; color: #8ea3b6; margin-bottom: 10px;
+      }
+      /* Every column starts at the same height, so the three headings line up
+         across the panel. */
+      .shape-col > h4:first-child { min-height: 12px; }
+      #shot-shape h4 + .panel-segmented { margin-bottom: 16px; flex-wrap: nowrap; }
+
+      /* Presets: the bar's segmented row, not the bottom panel's. */
+      #shot-shape .panel-segmented { gap: 3px; }
+      #shot-shape .panel-segmented button {
+        padding: 7px 4px; min-width: 0; border-radius: 6px;
+        font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+        color: #8ea3b6; background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(160, 200, 230, 0.16);
+      }
+      #shot-shape .panel-segmented button:hover {
+        background: rgba(125, 255, 178, 0.16); color: #fff;
+      }
+      #shot-shape .panel-segmented button.active {
+        color: #04120b; background: var(--hud); border-color: var(--hud); font-weight: 600;
+      }
+
+      /* Sliders: the bar's label/readout pair, stacked because a panel column
+         is too narrow to put a track between them. */
+      #shot-shape .panel-slider { margin-bottom: 15px; }
+      #shot-shape .panel-slider input[type="range"]::-webkit-slider-thumb {
+        width: 11px; height: 11px;
+      }
+      #shot-shape .panel-slider input[type="range"]::-moz-range-thumb {
+        width: 11px; height: 11px;
+      }
+      .shape-row {
+        display: flex; justify-content: space-between; align-items: baseline;
+        gap: 10px; margin-bottom: 7px;
+        font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #8ea3b6;
+      }
+      .shape-row strong {
+        font-size: 10px; font-weight: 600; color: #eaf4ff;
+        letter-spacing: 0.04em; text-transform: none; white-space: nowrap;
+      }
+
+      /* Buttons: outlined and quiet, filled only while the thing is on — the
+         same rule the bar follows, where a lit button always means "active". */
+      #shot-shape .panel-button {
+        width: 100%; margin-top: 0; margin-bottom: 6px;
+        height: 32px; padding: 0 12px; border-radius: 7px;
+        font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase;
+        color: #dbe9f6; background: transparent;
+        border: 1px solid rgba(160, 200, 230, 0.24);
+        display: flex; align-items: center; justify-content: center; gap: 7px;
+        transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+      }
+      #shot-shape .panel-button:hover { background: rgba(125, 255, 178, 0.16); color: #fff; }
+      #shot-shape .panel-button svg { width: 13px; height: 13px; flex: none; }
+      #shot-reverse[aria-pressed="true"],
+      #shot-loop[aria-pressed="true"] {
+        background: var(--hud); color: #04120b; border-color: var(--hud); font-weight: 600;
+      }
+      /* Both need this: `.panel-button:hover` is a class plus a pseudo-class and
+         so outranks a plain id-and-attribute rule, which meant a lit button
+         went dim under the pointer that had just switched it on. */
+      #shot-reverse[aria-pressed="true"]:hover,
+      #shot-loop[aria-pressed="true"]:hover { background: #9dffc6; color: #04120b; }
+
+      /* ---- Saved shots and the reel ---------------------------------------
+         Nine slots on the number keys, and a running order made of them. */
+      #shot-slots { display: flex; gap: 3px; margin-bottom: 12px; }
+      .slot-button {
+        appearance: none; border: 1px solid rgba(160, 200, 230, 0.2); cursor: pointer;
+        font: inherit; font-size: 10px; flex: 1 1 0; min-width: 0;
+        padding: 6px 0; border-radius: 6px;
+        background: rgba(255, 255, 255, 0.04); color: #55697c;
+        transition: background 0.12s, color 0.12s, border-color 0.12s;
+      }
+      /* Filled slots are the ones worth pressing, so they are the ones that
+         look pressable; empty ones stay quiet until you have something to put
+         in them. */
+      .slot-button.filled { color: #cfe0ef; border-color: rgba(125, 255, 178, 0.32); }
+      .slot-button:hover { background: rgba(125, 255, 178, 0.16); color: #fff; }
+      .slot-button.current { background: var(--hud); color: #04120b; font-weight: 600; }
+      /* The slot Save will write to. Picked first, written second — so the
+         panel has to keep saying which one it is until you do. */
+      .slot-button.picked {
+        outline: 2px solid #ffc878; outline-offset: -2px; color: #ffd9a0;
+      }
+
+      /* The small actions on a heading row — Save, Play — in the bar's button
+         idiom rather than the filled green the panel used. */
+      .shape-row button {
+        appearance: none; cursor: pointer; font: inherit;
+        font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase;
+        padding: 4px 10px; border-radius: 6px;
+        color: #dbe9f6; background: transparent;
+        border: 1px solid rgba(160, 200, 230, 0.24);
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
+      }
+      .shape-row button:hover { background: rgba(125, 255, 178, 0.16); color: #fff; }
+      .shape-row button[aria-pressed="true"] {
+        background: var(--hud); color: #04120b; border-color: var(--hud);
+      }
+      /* Save is the one amber control in here, matching the amber outline of
+         the slot it is about to write to. Outlined like everything else — it
+         was the only filled button on the panel and read as the main action,
+         which it is not until a slot has been picked. */
+      #shot-store:not([disabled]) { color: #ffd9a0; border-color: rgba(255, 200, 120, 0.5); }
+      #shot-store:not([disabled]):hover { background: rgba(255, 200, 120, 0.18); color: #fff; }
+      #shot-store[disabled] { opacity: 0.35; cursor: default; }
+
+      .reel-row { margin-top: 2px; }
+      #reel-strip {
+        display: flex; flex-wrap: wrap; gap: 4px; min-height: 26px;
+        padding: 5px; border-radius: 7px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px dashed rgba(160, 200, 230, 0.18);
+      }
+      .reel-chip {
+        appearance: none; border: 1px solid rgba(160, 200, 230, 0.24); cursor: grab;
+        font: inherit; font-size: 10px; padding: 3px 9px; border-radius: 999px;
+        background: rgba(255, 255, 255, 0.04); color: #dbe9f6;
+        touch-action: none; user-select: none;
+      }
+      .reel-chip.playing {
+        background: var(--hud); color: #04120b; border-color: var(--hud); font-weight: 600;
+      }
+      .reel-chip.dragging { opacity: 0.45; cursor: grabbing; }
+      .reel-chip.dropped { opacity: 0.3; text-decoration: line-through; }
+      #reel-note {
+        font-size: 10px; margin-top: 9px; line-height: 1.5; color: #8ea3b6;
+        letter-spacing: 0.02em; text-transform: none;
+      }
+      /* A slot number on the rows that have one, so the list doubles as the map
+         of what 1-9 will do. */
+      .menu-shot > span:first-child { margin-right: auto; }
+      .menu-slot {
+        flex: none; min-width: 15px; text-align: center;
+        font-size: 9px; padding: 1px 0; border-radius: 4px;
+        color: #04120b; background: rgba(125, 255, 178, 0.75);
+      }
+
+      /* ---- Shot picker ----------------------------------------------------
+         Three columns, one per scale, because scale is what the director itself
+         sequences by — the same grouping the shot list is written in. */
+      #shot-menu {
+        position: fixed; left: 50%; transform: translateX(-50%);
+        /* Clear of the shot editor when that is open, and back down against the
+           bar when it is not. main.ts sets this to sit just above the editor's
+           measured top; the 114px default is where it rests on its own. The
+           whole offset rather than an added height, because the two panels hang
+           off different things — the editor off the bar, this off the window —
+           so their baselines differ by the bar's own offset and adding a height
+           left them a pixel apart instead of the gap that was intended. */
+        bottom: var(--shot-menu-bottom, 114px);
+        z-index: 6; width: min(760px, 94vw); overflow-y: auto;
+        /* Everything up to the top of the screen, rather than a fraction of it:
+           the tallest column is fourteen shots, and a flat `vh` cap clipped the
+           last one on a short window while leaving room above it unused. The
+           editor underneath takes its share of that room. */
+        max-height: calc(100vh - 76px - var(--shot-menu-bottom, 114px));
+        padding: 16px 18px 18px;
+        background: rgba(6, 14, 20, 0.94);
+        border: 1px solid rgba(160, 200, 230, 0.24);
+        border-radius: 12px; backdrop-filter: blur(14px);
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 16px 22px;
+      }
+      /* `display: grid` outranks the UA rule for [hidden]. */
+      #shot-menu[hidden] { display: none; }
+      #shot-menu::-webkit-scrollbar { width: 6px; }
+      #shot-menu::-webkit-scrollbar-thumb {
+        background: rgba(125, 255, 178, 0.3); border-radius: 3px;
+      }
+      .menu-group { min-width: 0; }
+      .menu-group h4 {
+        font-size: 9px; font-weight: 600; letter-spacing: 0.22em;
+        text-transform: uppercase; color: var(--hud);
+        margin-bottom: 7px; padding: 0 8px;
+      }
+      .menu-shot {
+        appearance: none; border: 0; background: transparent; cursor: pointer;
+        font: inherit; font-size: 12px; width: 100%; text-align: left;
+        display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+        padding: 5px 8px; border-radius: 6px; color: #b9cbdb;
+        transition: background 0.12s ease, color 0.12s ease;
+      }
+      .menu-shot:hover { background: rgba(125, 255, 178, 0.13); color: #fff; }
+      /* Nothing in range to stand a camera on. */
+      .menu-shot:disabled { opacity: 0.34; cursor: default; }
+      .menu-shot:disabled:hover { background: none; color: inherit; }
+      .menu-shot.current { background: rgba(125, 255, 178, 0.16); color: var(--hud); }
+      .menu-mark {
+        flex: none; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+        color: #62778a; white-space: nowrap;
+      }
+      .menu-shot:hover .menu-mark, .menu-shot.current .menu-mark { color: #8ba2b5; }
+      /* Either popover opens across the tip line it sits over; one thing at a
+         time, and the key list is the fuller version of what the tip says. */
+      body:has(#shot-menu:not([hidden])) #tips,
+      body:has(#shot-shape:not([hidden])) #tips,
+      body:has(#shot-keys:not([hidden])) #tips { opacity: 0; }
+      /* Neither belongs over the help screen — nor over an open World / Style /
+         Controls panel, which occupies this end of the screen and which the bar
+         would otherwise float on top of. */
+      body:has(#overlay:not(.hidden)) #director-bar,
+      body:has(#overlay:not(.hidden)) #shot-menu,
+      body:has(#panel-body:not([hidden])) #director-bar,
+      body:has(#panel-body:not([hidden])) #shot-menu { display: none; }
+      /* One icon, flipped: the arrows point out to enter and in to exit. */
+      body.fullscreen #fullscreen svg { transform: rotate(180deg); }
+      /*
+       * Deliberately *not* hidden with the titles: going fullscreen is the
+       * first thing you would want to do, and this is the moment you would do
+       * it. It also has to sit above the overlay, or clicking it would count as
+       * the click that dismisses the title screen.
+       */
+
+      #brand {
+        position: absolute; top: 28px; left: 32px;
+        display: flex; align-items: center; gap: 13px;
+        animation: brand-in 1.1s 0.15s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+      }
+      #brand svg { width: 38px; height: 38px; display: block; flex: none; }
+      .brand-name {
+        font-size: 19px; font-weight: 500; letter-spacing: 0.28em;
+        text-transform: uppercase; color: #eaf4ff; line-height: 1;
+        text-shadow: 0 2px 16px rgba(0, 0, 0, 0.9);
+      }
+      .brand-name .accent { color: var(--hud); }
+      .brand-tag {
+        margin-top: 6px; font-size: 8px; letter-spacing: 0.42em;
+        text-transform: uppercase; color: #63798d; line-height: 1;
+        text-shadow: 0 1px 10px rgba(0, 0, 0, 0.9);
+      }
+      @keyframes brand-in {
+        from { opacity: 0; transform: translateX(-12px); }
+        to   { opacity: 1; transform: none; }
+      }
+
+      /* ---- Title sequence ------------------------------------------------
+         Five beats, each fading through the same slot in the middle of the
+         frame. They are stacked absolutely rather than laid out in flow, so a
+         full sentence and a one-word title occupy the same optical centre
+         instead of jumping the eye around between beats. */
+      #titles {
+        position: absolute; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        pointer-events: none; text-align: center;
+        /* Sits the beats above the geometric centre — partly the usual optical
+           correction for a title card, partly because the cinematic camera
+           tends to hold the aircraft near the middle of frame and the type was
+           landing straight on top of it. */
+        padding-bottom: 22vh;
+      }
+      .beat {
+        position: absolute; opacity: 0;
+        width: min(760px, 86vw); padding: 0 8px;
+      }
+      /* Scoped to .intro: dropping that class stops every beat dead, which is
+         what a skip should feel like, and leaves the CSS fallback below as the
+         only thing that reveals the panel if the script never runs at all. */
+      #overlay.intro .beat-1 { animation: beat-title 2.9s 0.45s ease both; }
+      #overlay.intro .beat-2 { animation: beat 2.4s 3.20s ease both; }
+      #overlay.intro .beat-3 { animation: beat 2.9s 5.45s ease both; }
+      #overlay.intro .beat-4 { animation: beat 3.2s 8.20s ease both; }
+      #overlay.intro .beat-5 { animation: beat 3.5s 11.25s ease both; }
+      #overlay.intro .beat-1 .rule { animation: rule 2.9s 0.45s ease both; }
+
+      @keyframes beat {
+        0%   { opacity: 0; transform: translateY(16px); }
+        20%  { opacity: 1; transform: none; }
+        80%  { opacity: 1; transform: none; }
+        100% { opacity: 0; transform: translateY(-12px); }
+      }
+      @keyframes beat-title {
+        0%   { opacity: 0; transform: scale(1.055); }
+        22%  { opacity: 1; transform: none; }
+        78%  { opacity: 1; transform: none; }
+        100% { opacity: 0; transform: scale(0.985); }
+      }
+      @keyframes rule {
+        0%, 10% { transform: scaleX(0); opacity: 0; }
+        45%     { transform: scaleX(1); opacity: 1; }
+        78%     { transform: scaleX(1); opacity: 1; }
+        100%    { transform: scaleX(1); opacity: 0; }
+      }
+
+      .t-title {
+        /* One line at every width. Wrapping split it as "HORIZON / F18", which
+           read as a mistake rather than a lockup. The vw term is sized so the
+           11 tracked-out characters always clear the beat's own width. */
+        white-space: nowrap;
+        font-size: clamp(26px, 6.6vw, 74px); font-weight: 300;
+        letter-spacing: 0.2em; text-transform: uppercase; color: #eaf4ff;
+        /* The indent cancels the trailing letter-space, which otherwise pushes
+           centred tracked-out type visibly left of centre. */
+        text-indent: 0.2em; line-height: 1.1;
+        text-shadow: 0 0 40px rgba(130, 195, 255, 0.30), 0 3px 30px rgba(0, 0, 0, 0.9);
+      }
+      .t-title .accent {
+        color: var(--hud);
+        text-shadow: 0 0 34px rgba(125, 255, 178, 0.45), 0 3px 26px rgba(0, 0, 0, 0.85);
+      }
+      .rule {
+        width: min(420px, 62vw); height: 1px; margin: 22px auto 0;
+        background: linear-gradient(90deg,
+          transparent, rgba(125, 255, 178, 0.7) 50%, transparent);
+      }
+      .t-sub {
+        font-size: clamp(16px, 3.2vw, 30px); letter-spacing: 0.52em;
+        text-transform: uppercase; color: #cfe0ef; text-indent: 0.52em;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6), 0 2px 9px rgba(0, 0, 0, 0.7);
+      }
+      /* The three text beats share one setting, so the sequence does not appear
+         to change typeface partway through. Each is broken by hand into two
+         lines rather than left to wrap, which orphaned their closing words. */
+      .t-line, .t-body {
+        text-wrap: pretty; /* no one-word last line if it wraps further */
+        font-size: clamp(17px, 3.1vw, 30px); font-weight: 300;
+        letter-spacing: 0.06em; line-height: 1.5;
+        /* Tight. Wide-radius shadows read as a halo around the letters rather
+           than as depth behind them; 5px is enough to lift white type off a
+           bright sky without any visible smear. */
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7), 0 2px 5px rgba(0, 0, 0, 0.5);
+      }
+      .t-line { color: #eaf4ff; }
+      /* A half-step down from the tagline — enough hierarchy to tell the hero
+         line from the two that explain it, now that they are the same size. */
+      .t-body { color: #d8e4f0; }
+      /* The design credit. `#titles` is click-through, so this one element has
+         to take pointer events back for the link to be reachable. */
+      .t-credit {
+        position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%);
+        font-size: 12px; font-weight: 500; letter-spacing: 0.32em;
+        text-transform: uppercase; white-space: nowrap; opacity: 0;
+        color: var(--hud); text-decoration: none; pointer-events: auto;
+        text-shadow: 0 0 18px rgba(125, 255, 178, 0.45), 0 2px 10px rgba(0, 0, 0, 0.9);
+      }
+      .t-credit:hover { color: #ffffff; text-decoration: underline; }
+      #overlay.intro .t-credit { animation: credit-in 1.2s 2.6s ease both; }
+      @keyframes credit-in { from { opacity: 0; } to { opacity: 1; } }
+
+      @media (max-width: 720px) {
+        #brand { top: 20px; left: 20px; gap: 10px; }
+        #corner-tools { top: 20px; right: 20px; gap: 6px; }
+        .icon-button { width: 34px; height: 34px; }
+        #brand svg { width: 30px; height: 30px; }
+        .brand-name { font-size: 15px; letter-spacing: 0.22em; }
+        .brand-tag { font-size: 7px; letter-spacing: 0.3em; }
+      }
+      /* Honour a reduced-motion preference: the beats still cross-fade, but
+         nothing slides or scales. */
+      @media (prefers-reduced-motion: reduce) {
+        /* The beats keep their timing and only lose the movement. The logo gets
+           its own keyframes — sharing the beats' would fade it back out. */
+        .beat, .rule { animation-name: fade-only !important; }
+        #brand { animation: brand-fade 0.6s 0.15s ease both; }
+        @keyframes fade-only {
+          0% { opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; }
+        }
+        @keyframes brand-fade { from { opacity: 0; } to { opacity: 1; } }
+      }
+
+      .panel {
+        max-width: 640px; max-height: 100%; overflow: hidden;
+        display: flex; flex-direction: column;
+        padding: 34px 40px;
+        border: 1px solid rgba(125, 255, 178, 0.22);
+        background: rgba(6, 13, 19, 0.82);
+        backdrop-filter: blur(3px);
+        border-radius: 6px;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+      }
+      /* The help panel is the default state, so a browser that never runs the
+         script still lands on something useful. `intro` is added by main.ts on
+         the first painted frame — putting it in the markup instead started the
+         beats at parse time, playing the title over a black screen while the
+         world was still being built. The keyframes then hold the panel back
+         until the beats are done. */
+      /* The panel is shown only in the two states that mean it: the keys after
+         Manual, and the full list on request.
+         Stated this way round rather than as "hidden during intro and choose"
+         because of the fade. Taking `choose` off to hide the overlay left the
+         panel displayed for the 0.6 s the overlay spends fading out, so picking
+         Scenic Flight flashed the help screen on the way to the runway. With
+         the rule keyed to `ready`, no combination of classes can put the panel
+         on screen unless it was asked for.
+         `scripted` is added by main.ts, so a browser that never runs the script
+         still falls through to the panel and lands on something useful. */
+      #overlay.scripted .panel { display: none; }
+      #overlay.scripted.ready .panel,
+      #overlay.scripted.full .panel { display: flex; }
+
+      /* ---- The choice ------------------------------------------------------
+         Centred: mark, wordmark, one line of explanation, two buttons. Nothing
+         else — it is a fork in the road, not a menu. */
+      #choose { display: none; }
+      #overlay.choose #choose {
+        display: flex; flex-direction: column; align-items: center; text-align: center;
+        max-width: 460px; padding: 8px 16px;
+        animation: panel-in 0.7s ease both;
+      }
+      /* An even wash over the whole frame. A radial pool put the contrast where
+         the words needed it, but a gradient dark enough to carry white type at
+         the centre has a visible edge somewhere out in the mid-field, and the
+         eye finds it immediately — a circle drawn over the landscape. Flat has
+         no edge to find. The flight still reads through it. */
+      #overlay.choose { background: rgba(4, 8, 13, 0.72); }
+      .c-mark { width: 74px; height: 74px; display: block; margin-bottom: 22px; }
+      .c-title {
+        font-size: 34px; font-weight: 500; letter-spacing: 0.3em;
+        text-transform: uppercase; color: #eaf4ff; line-height: 1;
+        /* Letter-spacing puts its width to the right of the last glyph, which
+           reads as the whole line sitting left of centre. */
+        text-indent: 0.3em;
+        text-shadow: 0 2px 24px rgba(0, 0, 0, 0.9);
+      }
+      .c-title .accent { color: var(--hud); }
+      .c-sub {
+        /* The wordmark is set at line-height 1, so its own box stops at the
+           baseline and a small margin here puts the sub into its descenders. */
+        margin-top: 18px; font-size: 10px; letter-spacing: 0.42em;
+        text-transform: uppercase; color: rgba(190, 214, 235, 0.72); text-indent: 0.42em;
+      }
+      .c-lede {
+        margin-top: 26px; font-size: 14px; line-height: 1.65;
+        color: rgba(214, 231, 246, 0.86); text-shadow: 0 1px 10px rgba(0, 0, 0, 0.8);
+      }
+      .c-actions { margin-top: 30px; display: flex; gap: 12px; flex-wrap: wrap;
+        justify-content: center; }
+      .c-actions button {
+        appearance: none; cursor: pointer; font: inherit;
+        font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase;
+        padding: 13px 26px; border-radius: 6px;
+        color: #dbe9f6; background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(160, 200, 230, 0.3);
+        transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+      }
+      .c-actions button:hover { background: rgba(125, 255, 178, 0.16); color: #fff; }
+      .c-actions .c-primary {
+        background: var(--hud); border-color: var(--hud); color: #04120b; font-weight: 600;
+      }
+      .c-actions .c-primary:hover { background: #9dffc6; color: #04120b; }
+      /* Keyboard focus still has to be visible, but in the screen's own colours
+         rather than the amber the director's panel uses for "this is the slot
+         you are about to overwrite" — nothing is being overwritten here. */
+      .c-actions button:focus-visible {
+        outline: 2px solid rgba(234, 244, 255, 0.75); outline-offset: 3px;
+      }
+      @media (max-width: 560px) {
+        .c-title { font-size: 26px; }
+        .c-mark { width: 60px; height: 60px; margin-bottom: 18px; }
+        .c-actions { flex-direction: column; width: 100%; }
+        .c-actions button { width: 100%; }
+      }
+      /* One brandmark at a time: the corner logo is the same mark, and holding
+         both while the centred one is the whole composition reads as a mistake.
+         It has to be an animation to leave — its entrance is one, and a running
+         animation's `both` fill beats any plain `opacity` set alongside it. */
+      #overlay.choose #brand { animation: brand-out 0.5s ease both; }
+      @keyframes brand-out { from { opacity: 1; } to { opacity: 0; } }
+      #overlay.ready .panel {
+        opacity: 1; transform: none;
+        transition: opacity 0.5s ease, transform 0.5s ease;
+      }
+      @keyframes panel-in {
+        from { opacity: 0; transform: translateY(14px); }
+        to   { opacity: 1; transform: none; }
+      }
+      .panel h1 {
+        font-size: 26px; font-weight: 600; letter-spacing: 0.16em;
+        color: #eaf4ff; text-transform: uppercase; margin-bottom: 6px;
+      }
+      .panel h1 .accent { color: var(--hud); }
+      .panel .sub {
+        font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase;
+        color: #6d8296; margin-bottom: 24px;
+      }
+      .keys {
+        display: grid; grid-template-columns: auto 1fr; gap: 7px 18px;
+        font-size: 13px; line-height: 1.5;
+        /* The full list is eighteen rows and can outrun a laptop screen. Scroll
+           the list rather than the panel, so the title and "click to start"
+           stay on screen instead of being pushed below the fold. */
+        overflow-y: auto; min-height: 0; padding-right: 6px;
+        scrollbar-width: thin; scrollbar-color: rgba(125, 255, 178, 0.35) transparent;
+      }
+      /* Only visible when the list actually overflows, which on a full-height
+         window it does not — but without it a clipped row looks like the end. */
+      .keys::-webkit-scrollbar { width: 6px; }
+      .keys::-webkit-scrollbar-thumb {
+        background: rgba(125, 255, 178, 0.3); border-radius: 3px;
+      }
+      .keys dt { color: var(--hud); white-space: nowrap; }
+      /* A subheading inside the two-column grid: spans both tracks so it needs
+         no description cell beside it. Two classes, so it outranks `.keys dt`
+         on the colour without needing to come later in the sheet. */
+      .keys .group {
+        grid-column: 1 / -1;
+        margin-top: 12px; color: #7d8fa0;
+        font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+      }
+      .keys dd { color: #9fb2c4; }
+      /* Two depths of help. The screen that follows the titles carries only the
+         keys needed to fly and look around; `full` — set by H, Escape or the
+         Help tab — adds the rest. Grid items, so `none` collapses the row
+         entirely and `block` puts it back where it belongs in the order. */
+      /* Child combinators keep the two jobs apart. `.keys .adv` and
+         `.keys dd .adv` both matched the span inside the H row, and the longer
+         selector won on specificity — so "Show this help" leaked onto the short
+         screen next to "All shortcuts". Row-level rules now match only direct
+         children of the list; the inline pair matches only inside a dd. */
+      .keys > .adv { display: none; }
+      #overlay.full .keys > .adv { display: block; }
+
+      .keys dd > .adv { display: none; }
+      .keys dd > .basic { display: inline; }
+      #overlay.full .keys dd > .adv { display: inline; }
+      #overlay.full .keys dd > .basic { display: none; }
+      .start {
+        flex: none; margin-top: 26px; padding-top: 18px;
+        border-top: 1px solid rgba(125, 255, 178, 0.16);
+        font-size: 13px; color: #8ea3b6;
+      }
+      .start b { color: #fff; font-weight: 600; }
+      .in-game { display: none; }
+      body.started .pre-start { display: none; }
+      body.started .in-game { display: inline; }
+      .blink { animation: blink 1.4s ease-in-out infinite; }
+      @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+      #error {
+        display: none; margin-top: 18px; padding: 12px 14px;
+        border-left: 3px solid #ff6b6b; background: rgba(255, 107, 107, 0.08);
+        color: #ffb4b4; font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+      }
+
+      /* Positioned to land where the canvas draws its own message — above
+         centre — so entering and leaving the cinematic view does not make the
+         line jump. */
+      #notice {
+        position: fixed; left: 0; right: 0; top: calc(50% - 150px);
+        z-index: 4; display: none; flex-direction: column; align-items: center; gap: 6px;
+        pointer-events: none; text-align: center; padding: 0 20px;
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
+      }
+      body.no-hud #notice { display: flex; }
+      #notice[data-empty="1"] { display: none; }
+      #notice strong { font-size: 30px; font-weight: 700; color: #fff; letter-spacing: 0.04em; }
+      #notice span { font-size: 15px; color: rgba(255, 255, 255, 0.72); }
+      /* The camera modes say their piece on the tip line now, so the notice is
+         often a title alone — and an empty span still earns the column's gap,
+         which shows up as the heading sitting slightly high. */
+      #notice span:empty { display: none; }
+
+      /* ---- Cinematic view ------------------------------------------------- */
+      #shot {
+        position: fixed; left: 28px; bottom: 26px; z-index: 5;
+        color: rgba(255, 255, 255, 0.62); font-size: 11px;
+        letter-spacing: 0.28em; text-transform: uppercase;
+        pointer-events: none; opacity: 0; transition: opacity 0.4s ease;
+        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+      }
+      body.cinematic #shot { opacity: 1; }
+
+      /* ---- Contextual tips ------------------------------------------------ */
+      #tips {
+        position: fixed; left: 50%; bottom: 128px; transform: translateX(-50%);
+        z-index: 2; pointer-events: none;
+        display: flex; flex-direction: column; align-items: center; gap: 8px;
+        width: max-content; max-width: 90vw;
+      }
+      .tip {
+        position: relative; pointer-events: auto;
+        padding: 9px 18px; border-radius: 999px;
+        background: rgba(6, 14, 20, 0.78);
+        border: 1px solid rgba(125, 255, 178, 0.3);
+        color: var(--hud); font-size: 13px; letter-spacing: 0.04em;
+        backdrop-filter: blur(8px);
+        opacity: 0; transform: translateY(8px);
+        transition: opacity 0.35s ease, transform 0.35s ease;
+      }
+      .tip.visible { opacity: 1; transform: translateY(0); }
+      /* The one thing in a tip that can be clicked, so it is the one thing
+         there that takes pointer events. It sits on the pill's corner rather
+         than under the stack: a dismiss belongs to the thing it dismisses. */
+      .tip-close {
+        appearance: none; cursor: pointer; font: inherit; pointer-events: auto;
+        position: absolute; top: -7px; right: -7px;
+        width: 18px; height: 18px; padding: 0; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(6, 14, 20, 0.92);
+        border: 1px solid rgba(160, 200, 230, 0.3);
+        color: #93a8bb; font-size: 13px; line-height: 1;
+        /* Quiet, but present: an affordance nobody can see is not one. It
+           brightens under the pointer rather than appearing from nothing. */
+        opacity: 0.5; transition: opacity 0.25s ease, color 0.15s, border-color 0.15s;
+      }
+      .tip:hover .tip-close, .tip-close:focus-visible { opacity: 1; }
+      .tip-close:hover { color: #eaf4ff; border-color: rgba(160, 200, 230, 0.6); }
+      /* Tips are appended after the overlay, so they paint on top of it. They
+         are hints about the flight and have no business over the help screen. */
+      body:has(#overlay:not(.hidden)) #tips { opacity: 0; }
+
+      /* ---- Bottom tabbed panel ------------------------------------------- */
+      #panel-root {
+        position: fixed; left: 50%; bottom: 0; transform: translateX(-50%);
+        z-index: 3; width: min(820px, 96vw);
+        display: flex; flex-direction: column; align-items: center;
+        pointer-events: none; /* only the controls themselves capture clicks */
+        font-size: 12px;
+        transition: opacity 0.5s ease;
+      }
+      /* Held back while the opening titles play — see main.ts. */
+      body.titles #panel-root { opacity: 0; }
+      body.titles #panel-body, body.titles #panel-tabs { pointer-events: none; }
+      /* Belt and braces, and the braces are the reliable half: `body.titles` is
+         added on the first painted frame, so clicking through the titles before
+         that frame lands leaves it never set — and the tab bar sat under the
+         choice screen. Keyed off the overlay's own state it cannot drift. */
+      body:has(#overlay.intro) #panel-root,
+      body:has(#overlay.choose) #panel-root { opacity: 0; }
+      body:has(#overlay.intro) #panel-tabs,
+      body:has(#overlay.choose) #panel-tabs,
+      body:has(#overlay.intro) #panel-body,
+      body:has(#overlay.choose) #panel-body { pointer-events: none; }
+      #panel-body, #panel-tabs { pointer-events: auto; }
+
+      #panel-tabs {
+        display: flex; gap: 2px; padding: 4px; order: 2;
+        background: rgba(6, 14, 20, 0.86);
+        border: 1px solid rgba(125, 255, 178, 0.22);
+        border-bottom: none; border-radius: 9px 9px 0 0;
+        backdrop-filter: blur(10px);
+      }
+      #panel-tabs button {
+        appearance: none; border: 0; cursor: pointer; font: inherit;
+        background: transparent; color: #8ea3b6;
+        letter-spacing: 0.16em; text-transform: uppercase;
+        padding: 9px 22px; border-radius: 6px; transition: background 0.15s, color 0.15s;
+      }
+      #panel-tabs button:hover { color: #dfe7f2; background: rgba(125, 255, 178, 0.1); }
+      #panel-tabs button.active { color: #04120b; background: var(--hud); font-weight: 600; }
+
+      #panel-body {
+        order: 1; width: 100%; max-height: 44vh; overflow-y: auto;
+        background: rgba(6, 14, 20, 0.92);
+        border: 1px solid rgba(125, 255, 178, 0.22);
+        border-radius: 10px 10px 0 0; padding: 18px 20px 20px;
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px 26px; backdrop-filter: blur(12px);
+      }
+      /* `display: grid` above outranks the UA rule for [hidden], so without this
+         the panel body stays on screen as an empty box when closed. */
+      #panel-body[hidden] { display: none; }
+      #panel-body h3 {
+        font-size: 10px; font-weight: 600; letter-spacing: 0.2em;
+        text-transform: uppercase; color: var(--hud); margin-bottom: 10px;
+      }
+      .panel-group { min-width: 0; }
+      /* One column of the controls tab: a grid cell that stacks its own groups,
+         so which settings sit together is a decision rather than an accident of
+         how tall the one above happened to be. */
+      .panel-column { min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+      .panel-row {
+        display: flex; justify-content: space-between; align-items: baseline;
+        gap: 12px; color: #9fb2c4; margin-bottom: 6px;
+      }
+      .panel-row strong { color: #fff; font-weight: 600; }
+      .panel-note {
+        color: #6d8296; font-size: 11px; line-height: 1.5; margin-top: 8px;
+      }
+
+      .panel-button {
+        appearance: none; cursor: pointer; font: inherit; width: 100%;
+        margin-top: 4px; padding: 9px 12px; border-radius: 6px;
+        color: var(--hud); background: rgba(125, 255, 178, 0.1);
+        border: 1px solid rgba(125, 255, 178, 0.35);
+        letter-spacing: 0.08em; transition: background 0.15s;
+      }
+      .panel-button:hover { background: rgba(125, 255, 178, 0.2); }
+      /* Two actions that differ only in one detail read best side by side. They
+         wrap on a narrow panel rather than squeezing the longer label. */
+      .panel-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+      .panel-buttons .panel-button { flex: 1 1 130px; width: auto; }
+
+      .panel-segmented { display: flex; flex-wrap: wrap; gap: 4px; }
+      .panel-segmented button {
+        appearance: none; cursor: pointer; font: inherit; flex: 1 1 auto;
+        padding: 7px 10px; border-radius: 5px; font-size: 11px;
+        color: #9fb2c4; background: rgba(255, 255, 255, 0.05);
+        border: 1px solid transparent; letter-spacing: 0.06em;
+        transition: background 0.15s, color 0.15s;
+      }
+      .panel-segmented button:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
+      .panel-segmented button.active {
+        color: #04120b; background: var(--hud); font-weight: 600;
+      }
+
+      .panel-slider { margin-bottom: 12px; }
+      /* A slider that follows a row of buttons was sitting on top of it, so its
+         label read as part of the buttons rather than as its own control. */
+      .panel-segmented + .panel-slider { margin-top: 14px; }
+      .panel-slider input[type="range"], .bar-slider input[type="range"] {
+        appearance: none; -webkit-appearance: none;
+        width: 100%; height: 3px; border-radius: 2px; cursor: pointer;
+        background: rgba(125, 255, 178, 0.25);
+      }
+      .panel-slider input[type="range"]::-webkit-slider-thumb,
+      .bar-slider input[type="range"]::-webkit-slider-thumb {
+        appearance: none; -webkit-appearance: none;
+        width: 13px; height: 13px; border-radius: 50%;
+        background: var(--hud); border: 0; cursor: pointer;
+      }
+      .panel-slider input[type="range"]::-moz-range-thumb,
+      .bar-slider input[type="range"]::-moz-range-thumb {
+        width: 13px; height: 13px; border-radius: 50%;
+        background: var(--hud); border: 0; cursor: pointer;
+      }
+      /* The bar's are smaller: a full-size grip on a 76px track is a knob with a
+         line behind it. */
+      .bar-slider input[type="range"]::-webkit-slider-thumb { width: 11px; height: 11px; }
+      .bar-slider input[type="range"]::-moz-range-thumb { width: 11px; height: 11px; }
+
+      .panel-check {
+        display: flex; align-items: center; gap: 9px;
+        margin-top: 10px; color: #9fb2c4; cursor: pointer;
+      }
+      .panel-check input { accent-color: #7dffb2; width: 14px; height: 14px; cursor: pointer; }
+
+      /* ---- Idle in fullscreen ---------------------------------------------
+         Everything drawn over the landscape fades out after a few seconds of
+         stillness, and comes back on any input. Gated on `fullscreen` as well
+         as `idle` for two reasons: it is the only state this is wanted in, and
+         the extra class is what lets these rules outrank the ones that show
+         the same elements — `body.cinematic #shot` sets an opacity of 1 at
+         exactly the specificity a lone `body.idle #shot` would have had. */
+      body.fullscreen.idle #panel-tabs,
+      body.fullscreen.idle #corner-tools,
+      body.fullscreen.idle #director-bar,
+      body.fullscreen.idle #free-bar,
+      body.fullscreen.idle #shot {
+        opacity: 0;
+        pointer-events: none;
+      }
+      /* The bars carry no transition of their own, and appearing instantly
+         while fading out slowly reads as a glitch rather than as a return. */
+      #panel-tabs, #corner-tools, #director-bar, #free-bar {
+        transition: opacity 0.45s ease;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+    <canvas id="hud"></canvas>
+
+    <!--
+      The HUD's own message line, in the DOM.
+
+      `notify()` paints into the HUD canvas, and the cinematic view hides that
+      canvas outright — symbology over a shot breaks it. The cost was that
+      every announcement in that mode, the name of the mode itself included,
+      was being drawn onto a hidden surface. This carries the same message,
+      from the same state, wherever the canvas is not there to carry it.
+    -->
+    <div id="notice" aria-live="polite">
+      <strong id="notice-text"></strong>
+      <span id="notice-sub"></span>
+    </div>
+
+    <div id="shot"></div>
+
+    <!--
+      The director's own controls: what is playing, how to change it, and
+      whether the sequence is running or held. Bottom centre and under the tip
+      line, where the eye already is in this mode — the top-right corner is for
+      tools that belong to the session (capture, fullscreen) rather than to the
+      shot. The picker itself is built from the shot library in `main.ts`.
+    -->
+    <div id="director-bar">
+      <button id="shot-prev" class="bar-button" type="button"
+              title="Previous shot (,)" aria-label="Previous shot">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M14.5 5 7.5 12l7 7" />
+        </svg>
+      </button>
+      <button id="shot-name" class="bar-name" type="button"
+              aria-haspopup="true" aria-expanded="false" title="Every shot">
+        <span id="shot-name-text"></span>
+        <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 15l6-6 6 6" />
+        </svg>
+      </button>
+      <button id="shot-next" class="bar-button" type="button"
+              title="Next shot (.)" aria-label="Next shot">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9.5 5l7 7-7 7" />
+        </svg>
+      </button>
+      <span class="bar-split"></span>
+      <button id="shot-pin" class="bar-button bar-pin" type="button"
+              aria-pressed="false" title="Hold this shot instead of cutting on (X)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 3.5h6l-1 5 3.5 3.5v2H6.5v-2L10 8.5z" />
+          <path d="M12 14v6.5" />
+        </svg>
+        <span id="shot-pin-label">Auto</span>
+      </button>
+      <!--
+        The cinematic view's controls, laid along the bar rather than behind a
+        button. That camera has exactly three things worth reaching for — the
+        pace and the two numbers behind it — and a popover to hold three
+        controls is a door in front of a doorway.
+      -->
+      <div id="pace-bar">
+        <div class="panel-segmented" id="pace-styles"></div>
+        <span class="bar-split"></span>
+        <label class="bar-slider">
+          <span>Length</span>
+          <input id="pace-hold" type="range" min="0.4" max="2.5" step="0.05" value="1"
+                 aria-label="How long each shot lasts" />
+          <strong id="pace-hold-value"></strong>
+        </label>
+        <label class="bar-slider">
+          <span>Travel</span>
+          <input id="pace-travel" type="range" min="0" max="4" step="0.05" value="1"
+                 aria-label="How far the camera moves across a shot" />
+          <strong id="pace-travel-value"></strong>
+        </label>
+      </div>
+      <!--
+        The orbit view's controls. Same bar, same reasoning as the pace group:
+        four things worth reaching for, and a popover in front of four controls
+        is a door in front of a doorway.
+      -->
+      <div id="orbit-bar">
+        <button id="orbit-direction" class="bar-button bar-pin" type="button"
+                title="Which way the camera circles">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 12a8 8 0 1 1-2.6-5.9" />
+            <path d="M20 4v4h-4" />
+          </svg>
+          <span id="orbit-direction-label">CW</span>
+        </button>
+        <span class="bar-split"></span>
+        <label class="bar-slider">
+          <span>Dist</span>
+          <input id="orbit-distance" type="range" min="12" max="160" step="1" value="34"
+                 aria-label="How far the camera circles from the aircraft" />
+          <strong id="orbit-distance-value"></strong>
+        </label>
+        <label class="bar-slider">
+          <span>Height</span>
+          <input id="orbit-height" type="range" min="-20" max="80" step="1" value="9"
+                 aria-label="How high above the aircraft the camera circles" />
+          <strong id="orbit-height-value"></strong>
+        </label>
+        <label class="bar-slider">
+          <span>Rate</span>
+          <input id="orbit-rate" type="range" min="0" max="8" step="0.1" value="2.1"
+                 aria-label="How fast the camera circles" />
+          <strong id="orbit-rate-value"></strong>
+        </label>
+      </div>
+      <!--
+        The free camera's controls. The nine views and their save button are the
+        same pair as the director's saved shots — pick a slot, then write to it
+        — because they are the same action and learning it twice would be a
+        waste. The two toggles say what the mouse and the camera are currently
+        doing, which is the part a modifier key and a passing notification
+        cannot: the lock in particular only shows itself while the aircraft is
+        turning, so without a label there is nothing to check against.
+      -->
+      <div id="free-bar">
+        <div id="free-slots"></div>
+        <button id="free-store" class="bar-button bar-pin" type="button"
+                title="Write the current framing into the picked view">Save</button>
+        <span class="bar-split"></span>
+        <button id="free-reframe" class="bar-button bar-pin" type="button"
+                aria-pressed="false" title="Drag moves what the camera looks at (or hold shift)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 4v16M4 12h16" />
+            <path d="M9 7l3-3 3 3M9 17l3 3 3-3M7 9l-3 3 3 3M17 9l3 3-3 3" />
+          </svg>
+          <span>Reframe</span>
+        </button>
+        <button id="free-lock" class="bar-button bar-pin" type="button"
+                title="What the camera is fixed to — saved with the view (X)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path id="free-lock-aircraft" d="M12 3l2 7 7 3v2l-7-1.5V19l2.5 2v1L12 21l-2.5 1v-1L12 19v-5.5L5 15v-2l7-3z" />
+            <g id="free-lock-world">
+              <circle cx="12" cy="12" r="8.5" />
+              <path d="M3.5 12h17M12 3.5a13 13 0 0 1 0 17a13 13 0 0 1 0-17z" />
+            </g>
+          </svg>
+          <span id="free-lock-label">Aircraft</span>
+        </button>
+      </div>
+      <!--
+        Named, not just drawn. Three sliders and nine save slots live behind
+        this icon and a bare pair of faders gave no hint of it — the one control
+        that opens everything else was the one nobody pressed.
+      -->
+      <button id="shot-shape-open" class="bar-button bar-pin" type="button" aria-expanded="false"
+              title="Edit this shot — pace, travel and the saved slots">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 8h10M18 8h2M4 16h4M12 16h8" />
+          <circle cx="16" cy="8" r="2" />
+          <circle cx="10" cy="16" r="2" />
+        </svg>
+        <span>Edit shot</span>
+      </button>
+      <!--
+        The scenic flight's speed, on the bar while a flight is running. It is
+        still in the World panel too — that is where you set it before taking
+        off; this is where you reach for it while watching.
+
+        After the shot controls rather than before them: in the director those
+        are what the bar is for, and the rate of a flight you are not steering
+        is the footnote.
+      -->
+      <div id="tour-speed">
+        <span class="bar-split"></span>
+        <span class="bar-label">Tour</span>
+        <div class="panel-segmented" id="tour-speeds"></div>
+      </div>
+      <!--
+        Three columns on a wide screen: what the sequence feels like, what to do
+        with the shot on screen, and the saved shots. They collapse to one on a
+        narrow one. The last two are the director's alone — the cinematic camera
+        has no single shot to act on — so they are whole columns that can be
+        hidden together.
+      -->
+      <div id="shot-shape" hidden>
+        <div class="shape-col">
+          <h4>Pace</h4>
+          <div class="panel-segmented" id="shot-styles"></div>
+          <h4 id="shot-scope">This shot</h4>
+          <div class="panel-slider">
+            <div class="shape-row"><span>Length</span><strong id="shot-hold-value"></strong></div>
+            <input id="shot-hold" type="range" min="0.4" max="2.5" step="0.05" value="1"
+                   aria-label="How long the shot lasts" />
+          </div>
+          <div class="panel-slider">
+            <div class="shape-row"><span>Travel</span><strong id="shot-travel-value"></strong></div>
+            <input id="shot-travel" type="range" min="0" max="4" step="0.05" value="1"
+                   aria-label="How far the camera moves across the shot" />
+          </div>
+        </div>
+
+        <div class="shape-col" id="shot-transport">
+          <h4>Playback</h4>
+          <button id="shot-replay" class="panel-button" type="button"
+                  title="Run this shot's move again from the top">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M8 5.5v13l11-6.5z" />
+            </svg>
+            Replay
+          </button>
+          <!--
+            Between Replay and Loop because it belongs with them: all three are
+            about how the shot on screen plays, rather than about what it is.
+          -->
+          <button id="shot-reverse" class="panel-button" type="button" aria-pressed="false"
+                  title="Play every shot back to front — the push becomes a pull">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M10.5 5.5v13L3 12z" />
+              <path d="M20 5.5v13l-7.5-6.5z" />
+            </svg>
+            Reverse
+          </button>
+          <button id="shot-loop" class="panel-button" type="button" aria-pressed="true"
+                  title="Repeat the move while the shot is held">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 9.5A4.5 4.5 0 0 1 8.5 5H18" />
+              <path d="M15 2.2 18.4 5 15 7.8" />
+              <path d="M20 14.5A4.5 4.5 0 0 1 15.5 19H6" />
+              <path d="M9 16.2 5.6 19 9 21.8" />
+            </svg>
+            Loop
+          </button>
+          <button id="shot-reset" class="panel-button" type="button">Reset this shot</button>
+        </div>
+
+        <div class="shape-col" id="shot-slots-block">
+          <div class="shape-row">
+            <span>Saved shots</span>
+            <button id="shot-store" type="button" disabled
+                    title="Save the running shot into the slot you picked">Save</button>
+          </div>
+          <div id="shot-slots"></div>
+          <div class="shape-row reel-row">
+            <span>Reel</span>
+            <button id="reel-play" type="button" aria-pressed="false"
+                    title="Play the saved shots in order">Play</button>
+          </div>
+          <div id="reel-strip"></div>
+          <p class="panel-note" id="reel-note"></p>
+        </div>
+      </div>
+      <button id="shot-help" class="bar-button" type="button" aria-expanded="false"
+              title="Shortcuts" aria-label="Shortcuts">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M9.5 9.3a2.6 2.6 0 1 1 3.3 3c-.6.2-.9.7-.9 1.3v.5" />
+          <path d="M12 17.4h.01" />
+        </svg>
+      </button>
+      <!-- Anchored to the bar rather than to the screen, so it opens over the
+           button that asked for it and disappears with the bar. -->
+      <div id="shot-keys" hidden>
+        <kbd>,</kbd><span>Previous shot</span>
+        <kbd>.</kbd><span>Next shot</span>
+        <kbd>X</kbd><span>Pin shot</span>
+        <kbd>Z</kbd><span>Reset shot</span>
+        <kbd>1&ndash;9</kbd><span>Saved shots</span>
+        <kbd>&#8679;1&ndash;9</kbd><span>Save this shot</span>
+      </div>
+    </div>
+    <div id="shot-menu" hidden></div>
+
+    <!-- Tuned in from the corner tools. The station list is built in main.ts
+         from the table in `Radio.ts`, so there is one list rather than two. -->
+    <div id="radio-panel" hidden>
+      <div class="radio-head">
+        <h4>Radio</h4>
+        <span id="radio-status">Off</span>
+      </div>
+      <div id="radio-stations"></div>
+      <label class="radio-file">
+        <input id="radio-file" type="file" accept="audio/*" />
+        <span>Play your own file…</span>
+      </label>
+      <div class="panel-slider">
+        <div class="shape-row"><span>Volume</span><strong id="radio-volume-value">50%</strong></div>
+        <input id="radio-volume" type="range" min="0" max="1" step="0.01" value="0.5"
+               aria-label="Radio volume" />
+      </div>
+      <p class="panel-note" id="radio-note">
+        Streams come from the internet, so this is the one part of the sim that
+        needs a connection. Nothing is fetched until you press play.
+      </p>
+    </div>
+
+    <div id="corner-tools">
+      <button id="radio" class="icon-button" type="button" aria-expanded="false"
+              title="Radio" aria-label="Radio">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 18V5.5l11-2v12" />
+          <circle cx="6.4" cy="18" r="2.6" />
+          <circle cx="17.4" cy="15.5" r="2.6" />
+        </svg>
+      </button>
+      <button id="screenshot" class="icon-button" type="button"
+              title="Save a screenshot" aria-label="Save a screenshot">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 8.5h3.2l1.6-2.5h8.4l1.6 2.5H21v11H3z" />
+          <circle cx="12" cy="13.5" r="3.6" />
+        </svg>
+      </button>
+      <button id="record" class="icon-button" type="button"
+              title="Record the flight" aria-label="Record the flight">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="6" width="12.5" height="12" rx="2.5" />
+          <path d="M15.5 10.5 21 7.5v9l-5.5-3z" />
+        </svg>
+      </button>
+      <button id="fullscreen" class="icon-button" type="button"
+              title="Fullscreen" aria-label="Toggle fullscreen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+        </svg>
+      </button>
+    </div>
+
+    <div id="overlay">
+      <div id="brand">
+        <svg viewBox="0 0 40 40" aria-hidden="true">
+          <circle cx="20" cy="20" r="17.5" fill="none"
+                  stroke="#7dffb2" stroke-opacity="0.45" stroke-width="1.3" />
+          <path d="M2.97 24 A17.5 17.5 0 0 0 37.03 24 Z"
+                fill="#7dffb2" fill-opacity="0.15" />
+          <path d="M2.97 24 H37.03" stroke="#7dffb2" stroke-opacity="0.55" stroke-width="1.1" />
+          <path d="M8 18.5 h6.5 l5.5 4.4 l5.5 -4.4 h6.5" fill="none"
+                stroke="#eaf4ff" stroke-width="2.1"
+                stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <div>
+          <div class="brand-name">Horizon <span class="accent">F18</span></div>
+          <div class="brand-tag">Flight Simulator</div>
+        </div>
+      </div>
+
+      <div id="titles" aria-hidden="true">
+        <div class="beat beat-1">
+          <h1 class="t-title">Horizon <span class="accent">F18</span></h1>
+          <div class="rule"></div>
+        </div>
+        <div class="beat beat-2">
+          <div class="t-sub">Flight Simulator</div>
+        </div>
+        <div class="beat beat-3">
+          <!-- Broken on the sentence rather than left to wrap, which orphaned
+               "to fly." on a line of its own. Both halves still fit the beat's
+               width down to the narrowest phone. -->
+          <div class="t-line">Fifteen worlds. Open skies.<br />Endless ways to fly.</div>
+        </div>
+        <div class="beat beat-4">
+          <div class="t-body">Change the environment, weather<br />and the time of the day.</div>
+        </div>
+        <div class="beat beat-5">
+          <div class="t-body">Switch to any camera perspective<br />and explore at your own pace.</div>
+        </div>
+        <a class="t-credit" href="https://sometek.fi" target="_blank" rel="noopener noreferrer"
+           >Design: sometek.fi</a>
+      </div>
+
+      <!--
+        What you are asked once the titles are over: watch, or fly.
+
+        It takes the slot the help panel used to appear in. Landing straight on
+        eighteen key bindings answers a question nobody asked yet — most people
+        arriving want to see the thing move, and that is one button away here.
+        The attract flight carries on behind it exactly as it does behind the
+        titles, so the choice is made over the view rather than over a scrim.
+      -->
+      <div id="choose">
+        <svg class="c-mark" viewBox="0 0 40 40" aria-hidden="true">
+          <circle cx="20" cy="20" r="17.5" fill="none"
+                  stroke="#7dffb2" stroke-opacity="0.45" stroke-width="1.3" />
+          <path d="M2.97 24 A17.5 17.5 0 0 0 37.03 24 Z"
+                fill="#7dffb2" fill-opacity="0.15" />
+          <path d="M2.97 24 H37.03" stroke="#7dffb2" stroke-opacity="0.55" stroke-width="1.1" />
+          <path d="M8 18.5 h6.5 l5.5 4.4 l5.5 -4.4 h6.5" fill="none"
+                stroke="#eaf4ff" stroke-width="2.1"
+                stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <h1 class="c-title">Horizon <span class="accent">F18</span></h1>
+        <div class="c-sub">Flight Simulator</div>
+        <p class="c-lede">Enjoy the flight on a cinematic autopilot,<br />
+          or take control and fly yourself.</p>
+        <div class="c-actions">
+          <button id="choose-tour" type="button" class="c-primary">Scenic Flight</button>
+          <button id="choose-manual" type="button">Manual</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h1>Horizon <span class="accent">F18</span></h1>
+        <div class="sub">Flight Simulator &middot; F/A-18 &middot; 6-DOF Flight Model</div>
+        <!-- Rows marked `adv` are hidden until someone asks for help, so the
+             first screen is short enough to read before taking off. -->
+        <dl class="keys">
+          <dt>&larr; / &rarr;</dt><dd>Turn left / right &mdash; hold longer to bank steeper and turn tighter</dd>
+          <dt>&uarr; / &darr;</dt><dd>Pitch &mdash; nose up / nose down</dd>
+          <dt>Shift / Ctrl</dt><dd>Throttle up / down &mdash; past 90% lights the afterburner</dd>
+          <dt class="adv">B</dt><dd class="adv">Wheel brakes (on the ground)</dd>
+          <dt class="adv">L</dt><dd class="adv">Raise / lower the landing gear</dd>
+          <dt class="adv">G</dt><dd class="adv">Toggle flight assists</dd>
+
+          <dt>C</dt><dd>Camera mode cycle</dd>
+          <dt>M</dt><dd>Mouse as flight stick (press again to release)</dd>
+          <dt>Space</dt><dd>Open / close the <b>Style</b> panel</dd>
+
+          <dt>F</dt><dd>Scenic flight &mdash; cinematic tour over landscape</dd>
+          <dt>N</dt><dd>New world &mdash; generate from a seed.</dd>
+          <dt>T</dt><dd>Time of day - Cycle through</dd>
+          <dt>R</dt><dd>Weather &mdash; clear, clouds, cirrus, hazy, fog, inversion, overcast, rain, storm</dd>
+
+          <dt>Backspace</dt><dd>Reset to takeoff position</dd>
+          <dt class="adv">P</dt><dd class="adv">Pause</dd>
+          <dt>H</dt><dd><span class="basic">All shortcuts</span><span class="adv">Show this help</span></dd>
+
+          <!-- Second ways to do things already listed above, kept to the end so
+               the list reads as one set of controls rather than two mixed
+               together. `adv` like the rows under it: a heading for keys nobody
+               can see yet would be a heading for nothing. -->
+          <dt class="adv group">Alternative controls</dt>
+          <dt class="adv">W / S</dt><dd class="adv">Pitch, stick-style &mdash; push down / pull up</dd>
+          <dt class="adv">A / D</dt><dd class="adv">Same as left / right</dd>
+          <dt class="adv">Q / E</dt><dd class="adv">Rudder left / right</dd>
+        </dl>
+        <div class="start">
+          Throttle up with <b>Shift</b> and rise up around 150 kt. Use the
+          <b>World</b>, <b>Style</b> and <b>Controls</b> tabs at the bottom of the
+          screen to change the landscape, the weather and how the aircraft flies,
+          and <b>Help</b> for every shortcut.
+          <!-- Once the flight is under way this screen is a pause, not a gate. -->
+          <div style="margin-top: 14px" class="blink">
+            <b class="pre-start">Click anywhere to start</b><b class="in-game">Click anywhere to continue</b>
+          </div>
+        </div>
+        <div id="error"></div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
