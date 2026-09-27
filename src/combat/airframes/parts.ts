@@ -278,10 +278,18 @@ export function landingGear(k: Kit, g: GearSpec): V3 {
   return v3(g.track / 2, g.y, g.z);
 }
 
-/** Sprung ash tail skid on a small steel pyramid. */
+/**
+ * Sprung ash tail skid on a small steel pyramid. The physics parks every type
+ * higher at the tail than the real machines sat, so the skid is long; in
+ * flight the rig swings it up under the fuselage (the node's `stow` angle),
+ * where it doesn't hang in every chase-camera frame like an aerial.
+ */
 export function tailSkid(k: Kit, pivot: V3, shoe: V3, fusWidth: number): void {
-  woodStrut(k, pivot, shoe, 0.05, COL.woodDark, 0.5, 'tail');
-  k.props(box(0.03, 0.015, 0.12).transform(alongZ(shoe, shoe.clone().add(v3(0, -0.01, 0.1)))), 'steel');
+  const d = shoe.clone().sub(pivot);
+  const stow = -(Math.atan2(-d.y, d.z) - 0.1);
+  const node = k.node('skid', pivot, { axis: v3(1, 0, 0), flags: { stow } });
+  k.props(strut(pivot, shoe, 0.055, 0.5, COL.woodDark, { m: k.n(6, 3, 2) }), 'wood', node, 'tail');
+  k.props(box(0.03, 0.015, 0.12).transform(alongZ(shoe, shoe.clone().add(v3(0, -0.01, 0.1)))), 'steel', node);
   if (k.detail === 0) {
     for (const s of [1, -1]) k.props(tube([v3(s * fusWidth, pivot.y + 0.02, pivot.z - 0.18), pivot], 0.01, 5, COL.darkSteel), 'steel');
   }
@@ -636,7 +644,7 @@ export function figure(k: Kit, f: FigureSpec): { neck: V3 } {
 
 // ---------------------------------------------------------------- cockpit
 
-export function coaming(k: Kit, path: V3[], r = 0.024): void {
+export function coaming(k: Kit, path: V3[], r = 0.021): void {
   k.props(tube(path, r, k.n(8, 4, 3), COL.leatherBlack), 'leather', 'static', 'fus');
 }
 

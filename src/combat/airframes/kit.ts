@@ -26,6 +26,8 @@ export interface NodeFlags {
   /** Lives outside the LOD so it shows at any distance (muzzle flashes). */
   always?: boolean;
   noShadow?: boolean;
+  /** Swing (rad, about the node axis) that stows a part in flight — the tail skid. */
+  stow?: number;
 }
 
 export interface NodeDef {

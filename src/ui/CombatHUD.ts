@@ -415,7 +415,9 @@ export class CombatHUD {
     const ctx = this.ctx;
     const w = 214 * s;
     const x = this.width - 34 * s - w;
-    const y = this.height - 40 * s;
+    // Two bars deep, so it sits higher than the flight block and their last
+    // labels share a baseline.
+    const y = this.height - 66 * s;
     const g = p.gun;
     const jammed = g.jam > 0;
     this.label(jammed ? 'Guns jammed' : 'Rounds', x, y - 44 * s, jammed ? WARN : DIM);

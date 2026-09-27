@@ -38,10 +38,15 @@ export interface FusKey {
 }
 
 export interface Opening {
-  /** Plan-view ellipse on the top of the fuselage. */
+  /**
+   * Plan-view superellipse on the top of the fuselage. Exponent ~2.6 gives
+   * the blunt, D-ish ends real cockpits had; a pointed elliptical front makes
+   * the coaming climb into a peak over a round-topped fuselage.
+   */
   z0: number;
   z1: number;
   hw: number;
+  p?: number;
 }
 
 export interface FusSpec {
@@ -254,8 +259,8 @@ export function buildFuselage(fus: Fuselage, sp: FusSpec, tubCol: RGB): FusOut {
     A.push(arcs);
   }
   const inside = (x: number, z: number, o: Opening): number => {
-    const zc = (o.z0 + o.z1) / 2, a = (o.z1 - o.z0) / 2;
-    return (x / o.hw) ** 2 + ((z - zc) / a) ** 2;
+    const zc = (o.z0 + o.z1) / 2, a = (o.z1 - o.z0) / 2, p = o.p ?? 2.6;
+    return Math.abs(x / o.hw) ** p + Math.abs((z - zc) / a) ** p;
   };
   const shAt = Z.map((z) => fus.param('sh', z));
 
@@ -294,7 +299,7 @@ export function buildFuselage(fus: Fuselage, sp: FusSpec, tubCol: RGB): FusOut {
         const d = inside(p.x, p.z, o);
         if (d < 1) {
           const zc = (o.z0 + o.z1) / 2;
-          const s = 1 / Math.sqrt(Math.max(d, 1e-6));
+          const s = Math.max(d, 1e-6) ** (-1 / (o.p ?? 2.6));
           const nx = p.x * s, nz = zc + (p.z - zc) * s;
           Q[k][r].set(nx, fus.topAt(nz, nx), nz);
         }
@@ -383,11 +388,12 @@ export function buildFuselage(fus: Fuselage, sp: FusSpec, tubCol: RGB): FusOut {
     tubs.push(tub.orient());
     // Rim path round the ellipse on the top surface.
     const path: V3[] = [];
-    const zc = (o.z0 + o.z1) / 2, a = (o.z1 - o.z0) / 2;
-    for (let q = 0; q <= 48; q++) {
+    const zc = (o.z0 + o.z1) / 2, a = (o.z1 - o.z0) / 2, pe = 2 / (o.p ?? 2.6);
+    const sp = (v: number): number => Math.sign(v) * Math.abs(v) ** pe;
+    for (let q = 0; q <= 64; q++) {
       // Start and end at the back, where the seam of the tube hides behind the pilot.
-      const t = Math.PI + (q / 48) * Math.PI * 2;
-      const x = Math.sin(t) * o.hw, z = zc - Math.cos(t) * a;
+      const t = Math.PI + (q / 64) * Math.PI * 2;
+      const x = sp(Math.sin(t)) * o.hw, z = zc - sp(Math.cos(t)) * a;
       path.push(new THREE.Vector3(x, fus.topAt(z, x) + 0.004, z));
     }
     rims.push(path);

@@ -364,6 +364,7 @@ class Rig implements AirframeRig {
   private gunFlash: THREE.Group | null = null;
   private readonly auxFlashes: THREE.Group[] = [];
   private wheels: THREE.Group | null = null;
+  private skid: { g: THREE.Group; stow: number; t: number } | null = null;
   private wheelR = 0.35;
   private wheelAngle = 0;
   private wheelRate = 0;
@@ -438,6 +439,7 @@ class Rig implements AirframeRig {
         const b = new THREE.Box3().setFromObject(g);
         this.wheelR = Math.max(0.2, (b.max.y - b.min.y) / 2);
       } else if (name === 'head') this.head = g;
+      else if (name === 'skid' && flags.stow) this.skid = { g, stow: flags.stow, t: -1 };
     }
     for (const sp of t.meta.spinners) {
       const g = groups.get(sp.node);
@@ -534,6 +536,15 @@ class Rig implements AirframeRig {
       else this.wheelRate *= Math.exp(-dt * 0.6);
       this.wheelAngle -= this.wheelRate * dt;
       if (near) this.wheels.quaternion.setFromAxisAngle(_X, this.wheelAngle % (Math.PI * 2));
+    }
+
+    // Tail skid: down on the ground, swung up out of the way in flight.
+    if (this.skid) {
+      const sk = this.skid;
+      const want = s.onGround ? 0 : 1;
+      // Snap on the first frame so a parked aircraft never spawns with its skid up.
+      sk.t = sk.t < 0 ? want : sk.t + (want - sk.t) * Math.min(1, dt * 3);
+      if (near) sk.g.quaternion.setFromAxisAngle(_X, sk.stow * sk.t);
     }
 
     // Muzzle flashes: each gun flickers independently while firing.

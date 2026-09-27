@@ -198,7 +198,7 @@ switch (view) {
   case 'tail': eye = body(2.4 * s, 1.0, 6.5 * s); look = body(0, 0.1, 3.6 * s); break;
   default: eye = body(-6.2 * s, 2.2 * s, -6.8 * s); look = body(0, 0.1, 0.2);
 }
-if (typeParam === 'all') { eye = new THREE.Vector3(x / 2 - 6, 9, -34); look = new THREE.Vector3(x / 2, 1.5, 0); }
+if (typeParam === 'all') { eye = new THREE.Vector3(x * 0.62, 7, -38); look = new THREE.Vector3(x * 0.46, 1.2, 0); }
 if (q.has('cx')) eye = body(num('cx', 0), num('cy', 0), num('cz', 0));
 if (q.has('lx')) look = body(num('lx', 0), num('ly', 0), num('lz', 0));
 camera.position.copy(eye);

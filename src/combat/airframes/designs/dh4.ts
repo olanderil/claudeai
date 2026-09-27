@@ -21,8 +21,8 @@ const GEAR = 1.9;
 const U_LE = -0.68, L_LE = U_LE + 0.35;
 const CH = 1.68;
 const HALF = 6.46;
-const U_Y = 1.36, L_Y = -0.52;
-const DIH = (3 * Math.PI) / 180;
+const U_Y = 1.18, L_Y = -0.52;
+const DIH = (2 * Math.PI) / 180;
 
 const KEYS: FusKey[] = [
   { z: -2.72, w: 0.34, top: 0.45, bot: -0.45, sh: 0.0, nt: 5, nb: 5 },

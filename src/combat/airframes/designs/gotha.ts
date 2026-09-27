@@ -41,7 +41,7 @@ const NOSE = { z0: -4.3, z1: -3.55, hw: 0.36 };
 const PILOT = { z0: -2.9, z1: -2.05, hw: 0.4 };
 const REAR = { z0: 2.3, z1: 3.2, hw: 0.4 };
 // The G.V's pilot sat to port, with the gangway to the nose on his right.
-const EYE = v3(-0.22, 1.12, -2.3);
+const EYE = v3(-0.24, 1.2, -2.3);
 
 const NAC_KEYS: FusKey[] = [
   { z: -2.3, w: 0.34, top: 0.44, bot: -0.4, sh: 0.0, nt: 4, nb: 4 },
@@ -167,7 +167,7 @@ export const gotha: Design = {
 
     // ---- crew: nose gunner, pilot, rear gunner
     // The nose gunner is posed facing forward; only the rear ring is animated.
-    gunRing(k, { centre: v3(0, 0.5, -3.92), R: 0.4, gun: 'parabellum', yaw: 'noseYaw', pitch: 'nosePitch', flash: 'nflash', forward: true, eyeUp: 0.55, coat: rgb('#4a4a40') });
+    gunRing(k, { centre: v3(0, 0.5, -3.92), R: 0.4, gun: 'parabellum', yaw: 'noseYaw', pitch: 'nosePitch', flash: 'nflash', forward: true, eyeUp: 0.34, coat: rgb('#4a4a40') });
     windscreen(k, v3(0, 0.66, -3.0), 0.5, 0.18, 0.4);
     k.node('cockpit', EYE, { flags: { cockpit: true } });
     instrumentBoard(k, FUS, -2.95, -0.05, 0.6, [

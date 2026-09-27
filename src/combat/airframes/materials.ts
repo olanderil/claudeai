@@ -94,14 +94,20 @@ if (uDamage > 0.002) {
     if (uDamage < 0.05 + h * 1.5) continue;
     vec2 centre = (cell + vec2(float(dx), float(dy)) + 0.15 + 0.7 * vec2(dmgHash(c + 3.1), dmgHash(c + 7.7))) * CELL;
     vec2 d = m - centre;
-    // A few holes open into ragged tears once the machine is badly shot up.
+    // A few holes open into ragged tears once the machine is badly shot up:
+    // gashes stretched along a random direction, the way doped linen splits.
     float tear = step(0.75, dmgHash(c + 9.2)) * smoothstep(0.5, 0.95, uDamage);
-    float r = 0.009 + 0.012 * dmgHash(c + 1.3) + 0.045 * tear;
+    float ta = dmgHash(c + 4.4) * 6.2832;
+    vec2 td = mat2(cos(ta), -sin(ta), sin(ta), cos(ta)) * d;
+    d = mix(d, vec2(td.x * 0.45, td.y), tear);
+    float r = 0.009 + 0.012 * dmgHash(c + 1.3) + 0.03 * tear;
     float ang = atan(d.y, d.x);
-    float jag = 1.0 + (0.1 + 0.28 * tear) * sin(ang * 7.0 + h * 40.0) + 0.09 * sin(ang * 13.0 + h * 17.0) + 0.07 * sin(ang * 23.0 + h * 5.0);
+    // Irregular rather than star-shaped: several weak harmonics with random phases.
+    float jag = 1.0 + 0.1 * sin(ang * 2.0 + h * 40.0) + 0.08 * sin(ang * 3.0 + h * 23.0)
+      + 0.06 * sin(ang * 5.0 + h * 17.0) + 0.04 * sin(ang * 11.0 + h * 5.0);
     float dist = length(d) / (r * jag);
     hole = max(hole, 1.0 - smoothstep(0.75, 1.0, dist));
-    fray = max(fray, 1.0 - smoothstep(1.0, 1.7, dist));
+    fray = max(fray, 1.0 - smoothstep(1.0, 1.45, dist));
     soot = max(soot, 1.0 - smoothstep(1.3, 4.0 + 3.0 * tear, dist));
   }
   float n = dmgNoise(vDmgPos * 1.6 + uSeed) * 0.65 + dmgNoise(vDmgPos * 4.1) * 0.35;

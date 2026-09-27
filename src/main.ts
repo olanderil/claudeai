@@ -1027,7 +1027,17 @@ function boot(): void {
   /** The title sequence and the main menu: the attract dogfight plays behind them. */
   let introRunning = true;
   let showMap = true;
+  // `?quality=low|medium|high|ultra` (or 0–3) picks the preset up front — for
+  // slow machines, and so a first frame never has to be drawn at the wrong one.
   let qualityIndex = DEFAULT_QUALITY;
+  {
+    const q = new URLSearchParams(window.location.search).get('quality');
+    if (q !== null) {
+      const byName = QUALITY_PRESETS.findIndex((p) => p.name.toLowerCase() === q.toLowerCase());
+      const n = byName >= 0 ? byName : Number(q);
+      if (Number.isInteger(n) && n >= 0 && n < QUALITY_PRESETS.length) qualityIndex = n;
+    }
+  }
   function applyQuality(): void {
     const preset = QUALITY_PRESETS[qualityIndex];
     engine.applyQuality(preset);
@@ -1405,6 +1415,8 @@ function boot(): void {
     game.battle.night = clamp((0.12 - lighting.sunDir.y) / 0.16, 0, 1);
   }
 
+  /** Dev: step the game without drawing, for headless tests on slow GL. */
+  let skipDraw = false;
   function render(alpha: number, frameDt: number): void {
     const dt = paused ? 0 : frameDt;
     let settingsChanged = false;
@@ -1585,7 +1597,7 @@ function boot(): void {
     const lens = rig.lens;
     const dist = engine.camera.position.distanceTo(rig.focusPoint);
     engine.setFocus(dist * lens.focusScale, dofOverride ?? lens.aperture);
-    engine.render(frameDt);
+    if (!skipDraw) engine.render(frameDt);
 
     if (pendingShot) {
       pendingShot = false;
@@ -1952,6 +1964,19 @@ function boot(): void {
         game, battle: game.battle, rig, world, engine, input, loop, hud, tips, panel, menus, sfx,
         terrainHeight, groundHeight, settlements, structures, toggleTour,
         startQuickBattle, startMission, startWatch, quitToMenu, pause,
+        get paused() { return paused; },
+        /** Run the game for `seconds` of game time without drawing. */
+        advance: (seconds: number, frame = 1 / 30): number => {
+          const t0 = performance.now();
+          skipDraw = true;
+          const steps = Math.round(frame * PHYSICS_HZ);
+          for (let t = 0; t < seconds; t += frame) {
+            for (let i = 0; i < steps; i++) fixedUpdate(1 / PHYSICS_HZ);
+            render(1, frame);
+          }
+          skipDraw = false;
+          return performance.now() - t0;
+        },
         setDof: (a: number | null) => { dofOverride = a; },
         setDepthDebug: (on: boolean) => engine.setDepthDebug(on),
         setTourSpeed: (i: number) => { tourSpeedIndex = i; applyTourSpeed(); },
