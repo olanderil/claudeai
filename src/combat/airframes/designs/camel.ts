@@ -33,19 +33,20 @@ const THRUST_Y = 0.02;
 
 const KEYS: FusKey[] = [
   { z: -0.78, w: 0.4, top: 0.4, bot: -0.38, sh: 0.01, nt: 2.0, nb: 2.2 },
-  { z: -0.55, w: 0.405, top: 0.37, bot: -0.46, sh: 0.04, nt: 2.4, nb: 4, hump: 0.1, hw: 0.25 },
-  { z: -0.3, w: 0.405, top: 0.36, bot: -0.5, sh: 0.06, nt: 2.8, nb: 6, hump: 0.2, hw: 0.27 },
-  { z: 0.0, w: 0.4, top: 0.35, bot: -0.5, sh: 0.06, nt: 3, nb: 7, hump: 0.22, hw: 0.27 },
-  { z: 0.28, w: 0.395, top: 0.34, bot: -0.49, sh: 0.06, nt: 3, nb: 7, hump: 0.07, hw: 0.26 },
-  { z: 0.6, w: 0.385, top: 0.33, bot: -0.47, sh: 0.06, nt: 2.8, nb: 7, hump: 0 },
+  { z: -0.55, w: 0.405, top: 0.37, bot: -0.46, sh: 0.04, nt: 2.4, nb: 4, hump: 0.14, hw: 0.26 },
+  { z: -0.3, w: 0.405, top: 0.36, bot: -0.5, sh: 0.06, nt: 2.8, nb: 6, hump: 0.24, hw: 0.28 },
+  { z: 0.0, w: 0.4, top: 0.35, bot: -0.5, sh: 0.06, nt: 3, nb: 7, hump: 0.27, hw: 0.28 },
+  { z: 0.24, w: 0.395, top: 0.34, bot: -0.49, sh: 0.06, nt: 3, nb: 7, hump: 0.17, hw: 0.27 },
+  { z: 0.45, w: 0.39, top: 0.335, bot: -0.48, sh: 0.06, nt: 3, nb: 7, hump: 0.03, hw: 0.26 },
+  { z: 0.7, w: 0.383, top: 0.33, bot: -0.47, sh: 0.06, nt: 2.8, nb: 7, hump: 0 },
   { z: 1.2, w: 0.36, top: 0.325, bot: -0.43, sh: 0.05, nt: 2.4, nb: 7 },
   { z: 2.2, w: 0.26, top: 0.28, bot: -0.33, sh: 0.04, nt: 2.3, nb: 7 },
   { z: 3.2, w: 0.12, top: 0.225, bot: -0.23, sh: 0.02, nt: 2.2, nb: 7 },
   { z: 3.77, w: 0.012, top: 0.2, bot: -0.18, sh: 0.0, nt: 2.2, nb: 7 },
 ];
 const FUS = new Fuselage(KEYS);
-const COCKPIT = { z0: 0.24, z1: 0.92, hw: 0.28 };
-const EYE = v3(0, 0.68, 0.58);
+const COCKPIT = { z0: 0.3, z1: 0.98, hw: 0.28 };
+const EYE = v3(0, 0.74, 0.68);
 const RIBS = Array.from({ length: 15 }, (_, i) => 0.05 + i * 0.3);
 
 /** Raked tip: the TE runs straight to `s1 - rake`, then the tip edge slants forward to meet the LE. */
@@ -148,8 +149,10 @@ export const camel: Design = {
       track: 1.52, y: axleY(az, GEAR, r), z: az, r, tyre: 0.04,
       front: v3(0.3, -0.42, -0.72), rear: v3(0.33, -0.5, -0.08), apexX: 0.6, hit: 'fus',
     });
-    const shoeZ = 3.62;
-    tailSkid(k, v3(0, -0.21, 3.22), v3(0, groundY(shoeZ, GEAR) + 0.01, shoeZ), 0.1);
+    // The physics parks every scout with its CG 1.5 m up at 11°, which leaves
+    // the tail higher than a real Camel's: a long sprung skid raked aft.
+    const shoeZ = 3.78;
+    tailSkid(k, v3(0, -0.25, 3.0), v3(0, groundY(shoeZ, GEAR) + 0.01, shoeZ), 0.13);
 
     // ---- engine, cowl, propeller
     rotaryEngine(k, v3(0, THRUST_Y, -1.05), { node: 'rotor0', axis: v3(0, 0, -1), rHead: 0.4 });
@@ -164,13 +167,15 @@ export const camel: Design = {
     const muzzles: THREE.Vector3[] = [];
     for (const side of [-1, 1] as const) muzzles.push(vickers(k, v3(side * 0.105, 0.5, 0.2), { left: side < 0 }));
     muzzles.forEach((m, i) => muzzleFlash(k, m, `flash${i}`));
-    aldis(k, v3(0, 0.63, 0.26), v3(0, 0.62, -0.36));
-    ringSight(k, v3(0.2, 0.6, -0.08), v3(0.2, 0.58, -0.72));
-    windscreen(k, v3(0, 0.5, 0.17), 0.3, 0.13, 0.45);
+    // Aldis low on the centreline; ring-and-bead on the eye line so the
+    // cockpit camera looks straight through it along the guns.
+    aldis(k, v3(0, 0.63, 0.3), v3(0, 0.625, -0.32));
+    ringSight(k, v3(0, EYE.y, 0.0), v3(0, EYE.y, -0.62), 0.06);
+    windscreen(k, v3(0, 0.55, 0.27), 0.32, 0.15, 0.5);
 
     // ---- cockpit interior (cockpit view only)
     k.node('cockpit', EYE, { flags: { cockpit: true } });
-    instrumentBoard(k, FUS, 0.17, -0.05, [
+    instrumentBoard(k, FUS, 0.26, -0.05, 0.43, [
       { dial: 'rpm', x: 0, y: 0.23, r: 0.046 },
       { dial: 'alt', x: -0.14, y: 0.2, r: 0.04 },
       { dial: 'asi', x: 0.14, y: 0.2, r: 0.04 },
@@ -179,8 +184,8 @@ export const camel: Design = {
       { dial: 'clock', x: 0.08, y: 0.07, r: 0.026 },
       { dial: 'level', x: -0.08, y: 0.07, r: 0.028 },
     ]);
-    controlColumn(k, v3(0, -0.45, 0.45), v3(0, 0.08, 0.36));
-    throttleBox(k, v3(-0.33, 0.1, 0.5));
+    controlColumn(k, v3(0, -0.45, 0.55), v3(0, 0.1, 0.46));
+    throttleBox(k, v3(-0.33, 0.12, 0.6));
 
     // ---- pilot
     const pilot = figure(k, { eye: EYE, node: 'pilot', headNode: 'head', flags: { pilot: true } });
@@ -343,8 +348,8 @@ export const camel: Design = {
       smudge(p, `fus_${side}`, hx, hy, 0.2, 0.08, 0.25);
       mud(p, `fus_${side}`, 0, 6, vBot - 0.05, vBot + 0.3, 90, 11);
     }
-    chips(p, 'cowl', -2, 4, 0.1, 0.24, 1600, 21);
-    chips(p, 'cowl', -2, 4, 0.24, 0.7, 120, 22);
+    chips(p, 'cowl', -2, 4, 0.12, 0.22, 320, 21);
+    chips(p, 'cowl', -2, 4, 0.22, 0.7, 18, 22);
     mud(p, 'L_bot', 0.3, 1.6, 0, 1.37, 120, 12);
     streaks(p, 'L_bot', 0.3, 0.9, 0.0, 1.2, 1, 0.8, { count: 20, alpha: 0.3, seed: 8 });
     smudge(p, 'L_top', 0.55, 0.5, 0.25, 0.35, 0.3);

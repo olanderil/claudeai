@@ -14,9 +14,9 @@ import type * as THREE from 'three';
  */
 
 export const C = {
-  pc10: '#5a563a',
-  pc10dark: '#4a4630',
-  cdl: '#d9ccab',
+  pc10: '#4b452e',
+  pc10dark: '#3f3a27',
+  cdl: '#c6b692',
   rfcBlue: '#24305a',
   rfcRed: '#a3282a',
   white: '#ebe8de',

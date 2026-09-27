@@ -28,7 +28,7 @@ export const COL = {
   rubber: rgb('#1d1c1b'),
   leather: rgb('#3e2a1b'),
   leatherBlack: rgb('#231a13'),
-  wood: rgb('#a8733f'),
+  wood: rgb('#8a6a48'),
   woodDark: rgb('#6e4526'),
   interior: rgb('#8a6a45'),
   oily: rgb('#4a4640'),

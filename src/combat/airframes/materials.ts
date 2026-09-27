@@ -117,7 +117,9 @@ export function skinMaterial(maps: SkinMaps): THREE.MeshPhysicalMaterial {
     // Doped linen has a soft satin sheen rather than a gloss coat.
     clearcoat: 0.18,
     clearcoatRoughness: 0.55,
-    envMapIntensity: 0.9,
+    // The sky-only environment lights undersides from below as if the ground
+    // were sky; keep its share of the diffuse modest.
+    envMapIntensity: 0.55,
   });
   armDamage(m, makeDamageUniforms(maps.metres, 0));
   return m;

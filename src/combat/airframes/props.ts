@@ -119,7 +119,7 @@ export function propTextures(): PropTextures {
     const n = 9;
     for (let k = 0; k < n; k++) {
       const x0 = d.x + (k * d.w) / n;
-      ctx.fillStyle = k % 2 === 0 ? '#e9b98f' : '#b56f45';
+      ctx.fillStyle = k % 2 === 0 ? '#b98258' : '#7b4629';
       ctx.fillRect(x0, d.y, d.w / n + 1, d.h);
       ctx.fillStyle = 'rgba(40,20,10,0.55)';
       ctx.fillRect(x0, d.y, 1.2, d.h);
@@ -370,12 +370,12 @@ export function propBlurTexture(): THREE.Texture {
     // Blade width profile: narrow at the root, widest ~70 %, rounded tip.
     const width = r < 0.12 ? 0 : Math.sin(Math.min(1, (r - 0.12) / 0.8) * Math.PI * 0.62) * (r > 0.9 ? Math.sqrt(Math.max(0, (1 - r) / 0.1)) : 1);
     const streak = 0.75 + 0.25 * Math.sin(a * 2 + Math.sin(r * 9) * 0.4) ** 8 + 0.12 * (vnoise(a * 30, r * 6, 7) - 0.5);
-    let alpha = 0.34 * width * streak;
+    let alpha = 0.2 * width * streak;
     let cr = 0.36, cg = 0.22, cb = 0.14;
     if (r > 0.86) {
       // Brass tipping reads as a ring.
       const tip = Math.min(1, (r - 0.86) / 0.03) * Math.min(1, (1 - r) / 0.03);
-      alpha = Math.max(alpha, 0.42 * tip * streak);
+      alpha = Math.max(alpha, 0.24 * tip * streak);
       cr = 0.75; cg = 0.58; cb = 0.3;
     }
     img.data[o] = cr * 255;
