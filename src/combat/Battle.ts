@@ -723,6 +723,7 @@ export class Battle implements PlaneEvents, TargetHooks {
         this.beams.set(t, beam);
       }
       beam.visible = t.alive && this.night > 0.05;
+      t.model.setLit?.(beam.visible ? this.night : 0);
       if (!beam.visible) continue;
       beam.position.copy(t.position);
       beam.position.y += 2.2;

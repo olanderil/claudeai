@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { M, Parts, V, rng, type HitSphere, type Vec3 } from './util';
-import { NOISE_GLSL, TILE, crossPath, uberMaterial } from './atlas';
+import { ENV_OCCLUSION, NOISE_GLSL, TILE, crossPath, uberMaterial } from './atlas';
 import { soldier } from './figures';
 import { PAINT, COL } from './blocks';
 import { heightToNormal } from './balloon';
@@ -71,7 +71,7 @@ function paintHull(): { map: THREE.CanvasTexture; normalMap: THREE.DataTexture; 
   const pxU = W / LEN;
   const panelH = HULL_ROWS / SIDES;
   const yBlack0 = BLACK_FROM * HULL_ROWS, yBlack1 = (1 - BLACK_FROM) * HULL_ROWS;
-  const silver = [186, 189, 188];
+  const silver = [178, 180, 178];
   const black = [20, 21, 22];
 
   h.fillStyle = '#808080'; h.fillRect(0, 0, W, H);
@@ -98,7 +98,7 @@ function paintHull(): { map: THREE.CanvasTexture; normalMap: THREE.DataTexture; 
   for (let k = 0; k <= SIDES; k++) {
     const y = k * panelH;
     const isBlack = y > yBlack0 + 1 && y < yBlack1 - 1;
-    a.fillStyle = isBlack ? 'rgba(90,92,96,0.35)' : 'rgba(70,72,72,0.45)';
+    a.fillStyle = isBlack ? 'rgba(90,92,96,0.14)' : 'rgba(70,72,72,0.24)';
     a.fillRect(0, y - 1, W, 2);
     h.fillStyle = '#d0d0d0'; h.fillRect(0, y - 1.5, W, 3);
   }
@@ -107,7 +107,7 @@ function paintHull(): { map: THREE.CanvasTexture; normalMap: THREE.DataTexture; 
     for (const [z, main] of [[zr, true], [zr + 5, false]] as const) {
       if (z >= 97) continue;
       const x = (z - Z0) * pxU;
-      a.fillStyle = main ? 'rgba(60,62,62,0.45)' : 'rgba(60,62,62,0.25)';
+      a.fillStyle = main ? 'rgba(60,62,62,0.3)' : 'rgba(60,62,62,0.14)';
       a.fillRect(x - 1, 0, main ? 3 : 2, HULL_ROWS);
       h.fillStyle = main ? '#e8e8e8' : '#b8b8b8'; h.fillRect(x - (main ? 2 : 1), 0, main ? 4 : 2, HULL_ROWS);
       h.fillStyle = main ? '#606060' : '#707070'; h.fillRect(x - (main ? 4 : 2), 0, 2, HULL_ROWS); h.fillRect(x + (main ? 2 : 1), 0, 2, HULL_ROWS);
@@ -174,7 +174,7 @@ function paintHull(): { map: THREE.CanvasTexture; normalMap: THREE.DataTexture; 
   }
   // Roughness (G) / metalness (B): aluminium dope is half-metallic, black dope is not.
   const ox = (px: number) => px / 2;
-  o.fillStyle = 'rgb(255,107,140)'; o.fillRect(0, 0, W / 2, H / 2);
+  o.fillStyle = 'rgb(255,128,102)'; o.fillRect(0, 0, W / 2, H / 2);
   o.fillStyle = 'rgb(255,184,20)'; o.fillRect(0, ox(yBlack0), W / 2, ox(yBlack1 - yBlack0));
   for (let s = 0; s < 4; s++) {
     if (s === 1 || s === 3) { o.fillStyle = 'rgb(255,184,20)'; o.fillRect(ox(s * slotW), ox(FIN_Y0 - 8), ox(slotW), ox(FIN_H + 16)); }
@@ -336,7 +336,7 @@ float zRim = smoothstep(-5.0, 0.0, ze) * (1.0 - smoothstep(0.0, 7.0, ze) * 0.6);
 
 const SKIN_EMIT = /* glsl */ `
 #include <emissivemap_fragment>
-totalEmissiveRadiance += vec3(1.0, 0.36, 0.07) * zRim * 8.0 * (0.75 + 0.25 * gmNoise(vBPos * 0.6 + uFront)) * uGlow;
+totalEmissiveRadiance += vec3(1.0, 0.3, 0.05) * zRim * 4.2 * (0.6 + 0.5 * gmNoise(vBPos * 0.6 + uFront)) * uGlow;
 `;
 
 function skinMaterial(tex: ReturnType<typeof paintHull>, burning: boolean): THREE.MeshStandardMaterial {
@@ -344,6 +344,12 @@ function skinMaterial(tex: ReturnType<typeof paintHull>, burning: boolean): THRE
     map: tex.map, normalMap: tex.normalMap, roughnessMap: tex.orm, metalnessMap: tex.orm,
     roughness: 1, metalness: 1, side: burning ? THREE.DoubleSide : THREE.FrontSide,
   });
+  if (!burning) {
+    mat.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_maps>', ENV_OCCLUSION);
+    };
+    mat.customProgramCacheKey = () => 'gm-zep-skin';
+  }
   if (burning) {
     mat.userData.uFront = { value: 200 };
     mat.userData.uGlow = { value: 1 };
@@ -356,7 +362,10 @@ function skinMaterial(tex: ReturnType<typeof paintHull>, burning: boolean): THRE
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>\nuniform float uFront;\nuniform float uGlow;\nvarying vec3 vBPos;\n${NOISE_GLSL}`)
         .replace('#include <map_fragment>', SKIN_FRAG)
-        .replace('#include <emissivemap_fragment>', SKIN_EMIT);
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 1.0, zChar);')
+        .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor *= 1.0 - zChar;')
+        .replace('#include <emissivemap_fragment>', SKIN_EMIT)
+        .replace('#include <lights_fragment_maps>', ENV_OCCLUSION);
     };
     mat.customProgramCacheKey = () => 'gm-zep-skin-burn';
   }
@@ -371,8 +380,17 @@ function skeletonMaterial(): THREE.MeshStandardMaterial {
     sh.uniforms.uFront = mat.userData.uFront;
     sh.uniforms.uHeat = mat.userData.uHeat;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vBPos;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBPos = position;');
+      .replace('#include <common>', `#include <common>\nuniform float uFront;\nvarying vec3 vBPos;\n${NOISE_GLSL}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+vBPos = position;
+{
+  // Burnt-out framework sags and buckles as it loses its strength.
+  float sd = position.z - uFront;
+  float sk = smoothstep(0.0, 70.0, sd);
+  float sn = gmNoise(position * 0.07);
+  transformed.y -= sk * (1.2 + 3.2 * sn) * (1.0 - 0.4 * abs(position.y) / 12.0);
+  transformed.x *= 1.0 + sk * (sn - 0.5) * 0.3;
+}`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>\nuniform float uFront;\nuniform float uHeat;\nvarying vec3 vBPos;\n${NOISE_GLSL}`)
       .replace('#include <emissivemap_fragment>', /* glsl */ `
@@ -382,8 +400,8 @@ function skeletonMaterial(): THREE.MeshStandardMaterial {
   float d = vBPos.z - uFront;
   float n = gmNoise(vBPos * 0.5);
   float g = d > -2.0 ? exp(-max(d, 0.0) / 22.0) * smoothstep(-2.0, 1.0, d) : 0.0;
-  vec3 hot = mix(vec3(0.9, 0.16, 0.03), vec3(1.0, 0.62, 0.3), exp(-max(d, 0.0) / 6.0));
-  totalEmissiveRadiance += hot * g * (3.0 + 5.0 * n) * uHeat;
+  vec3 hot = mix(vec3(0.9, 0.14, 0.02), vec3(1.0, 0.42, 0.1), exp(-max(d, 0.0) / 6.0));
+  totalEmissiveRadiance += hot * g * (1.6 + 3.2 * n) * uHeat;
   diffuseColor.rgb *= 1.0 - 0.55 * smoothstep(0.0, 30.0, d);
 }`);
   };
@@ -411,8 +429,8 @@ function skeleton(front: boolean): THREE.BufferGeometry {
     const outer = poly(z, rr * 0.975), inner = poly(z, rr * 0.9);
     for (let k = 0; k < SIDES; k++) {
       const k1 = (k + 1) % SIDES;
-      p.beam(outer[k], outer[k1], 0.5, o, 0.4);
-      p.beam(inner[k], inner[k1], 0.35, o, 0.3);
+      p.beam(outer[k], outer[k1], 0.62, o, 0.5);
+      p.beam(inner[k], inner[k1], 0.42, o, 0.35);
       const mid = inner[k].clone().lerp(inner[k1], 0.5);
       p.beam(outer[k], mid, 0.18, o);
       p.beam(mid, outer[k1], 0.18, o);
@@ -547,8 +565,8 @@ function zeppelinTemplate(): ZepTemplate {
   const [skinF, skinR] = splitZ(hull, Z_BREAK);
 
   const dF = new Parts(961), dR = new Parts(962);
-  const car = { color: 0x232426, tile: TILE.RIVET, scale: 1.6, rough: 0.55, metal: 0.35 };
-  const carTop = { color: 0x8a8d8c, tile: TILE.RIVET, scale: 1.6, rough: 0.45, metal: 0.6 };
+  const car = { color: 0x5b5e60, tile: TILE.RIVET, scale: 1.6, rough: 0.5, metal: 0.45 };
+  const carTop = { color: 0x9a9d9c, tile: TILE.RIVET, scale: 1.6, rough: 0.45, metal: 0.6 };
   const strut = PAINT(0x2a2b2c, 0.5, 0.5);
   const glass = { color: 0xb8bdb8, tile: TILE.WINDOW, uv: 'decal' as const, rough: 0.2, metal: 0.3 };
   const props: Vec3[] = [];

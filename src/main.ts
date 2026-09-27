@@ -24,6 +24,7 @@ import { QUALITY_PRESETS, DEFAULT_QUALITY } from './render/Quality';
 import { Game, DEFAULT_PILOT } from './game/Game';
 import type { MissionInfo } from './game/Campaign';
 import type { PlaneVisual } from './combat/PlaneVisual';
+import { warmGroundModels } from './combat/GroundModels';
 
 /** Physics rate. Fixed and high enough that the aero integration stays stable. */
 const PHYSICS_HZ = 120;
@@ -1962,6 +1963,9 @@ function boot(): void {
   // The attract dogfight plays behind the title screen, so the loop runs from
   // the start rather than waiting for the click.
   loop.start();
+  // Build every ground model once while the titles play, so the first sortie
+  // doesn't stall painting hangar canvas and balloon envelopes.
+  window.setTimeout(() => warmGroundModels(), 2500);
 
   // --- Title sequence ------------------------------------------------------
   //

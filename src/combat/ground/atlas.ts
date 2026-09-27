@@ -149,13 +149,13 @@ DEFS[TILE.PAINT] = {
 DEFS[TILE.CANVAS] = {
   mottle: 0.07, mottleFreq: 3, grain: 0.06, hn: 0.08, bump: 2.2,
   paint({ a, h, r, W }) {
-    a.fillStyle = g(0.83); a.fillRect(0, 0, P, P);
+    a.fillStyle = g(0.84); a.fillRect(0, 0, P, P);
     // Two sewn strips per tile, each a slightly different dye lot.
-    a.fillStyle = g(0.79, 0.6); a.fillRect(P / 2, 0, P / 2, P);
-    for (let i = 0; i < 12; i++) {
+    a.fillStyle = g(0.8, 0.35); a.fillRect(P / 2, 0, P / 2, P);
+    for (let i = 0; i < 9; i++) {
       const x = r() * P, y = r() * P, rad = 10 + r() * 45;
       const dark = r() < 0.7;
-      W(a, () => blob(a, x, y, rad, dark ? rgb(70, 55, 35, 0.13) : g(1, 0.08), dark ? rgb(70, 55, 35, 0) : g(1, 0)));
+      W(a, () => blob(a, x, y, rad, dark ? rgb(70, 55, 35, 0.08) : g(1, 0.06), dark ? rgb(70, 55, 35, 0) : g(1, 0)));
     }
     // Wrinkles: long soft diagonal ridges in the height layer.
     for (let i = 0; i < 9; i++) {
@@ -314,9 +314,9 @@ DEFS[TILE.CORRUGATED] = {
 DEFS[TILE.EARTH] = {
   mottle: 0.2, mottleFreq: 3, grain: 0.1, hn: 0.3, hFreq: 6, bump: 2,
   paint({ a, h, r, W }) {
-    a.fillStyle = g(0.6); a.fillRect(0, 0, P, P);
+    a.fillStyle = g(0.82); a.fillRect(0, 0, P, P);
     for (let i = 0; i < 70; i++) {
-      const x = r() * P, y = r() * P, rad = 3 + r() * 13, lum = 0.35 + r() * 0.5;
+      const x = r() * P, y = r() * P, rad = 3 + r() * 13, lum = 0.6 + r() * 0.4;
       W(a, () => blob(a, x, y, rad, g(lum, 0.45), g(lum, 0)));
       W(h, () => blob(h, x, y, rad, g(0.75, 0.6), g(0.5, 0)));
     }
@@ -334,10 +334,10 @@ DEFS[TILE.EARTH] = {
 DEFS[TILE.TURF] = {
   mottle: 0.16, mottleFreq: 3, grain: 0.08, hn: 0.15, bump: 1.6,
   paint({ a, h, r, W }) {
-    a.fillStyle = g(0.5); a.fillRect(0, 0, P, P);
+    a.fillStyle = g(0.72); a.fillRect(0, 0, P, P);
     for (let i = 0; i < 1800; i++) {
       const x = r() * P, y = r() * P, ang = -Math.PI / 2 + (r() - 0.5) * 1.2, len = 3 + r() * 8;
-      const x1 = x + Math.cos(ang) * len, y1 = y + Math.sin(ang) * len, lum = 0.35 + r() * 0.65;
+      const x1 = x + Math.cos(ang) * len, y1 = y + Math.sin(ang) * len, lum = 0.55 + r() * 0.45;
       W(a, () => line(a, x, y, x1, y1, 1.1, g(lum, 0.8)));
       if (i % 3 === 0) W(h, () => line(h, x, y, x1, y1, 1.2, g(0.8, 0.5)));
     }
@@ -650,9 +650,9 @@ DEFS[TILE.NET] = {
     for (let k = -P; k <= P * 2; k += step) {
       W(a, () => { line(a, k, 0, k + P, P, 1.8, rgb(62, 56, 40)); line(a, k, 0, k - P, P, 1.8, rgb(62, 56, 40)); });
     }
-    const pal = [[74, 84, 46], [92, 98, 56], [104, 84, 52], [136, 118, 72], [48, 54, 36], [80, 70, 44]];
-    for (let i = 0; i < 150; i++) {
-      const x = r() * P, y = r() * P, ang = r() * Math.PI, lw = 6 + r() * 14, lh = 2.5 + r() * 5;
+    const pal = [[96, 106, 60], [118, 124, 72], [128, 106, 66], [160, 140, 88], [70, 78, 50], [104, 92, 58]];
+    for (let i = 0; i < 125; i++) {
+      const x = r() * P, y = r() * P, ang = r() * Math.PI, lw = 5 + r() * 11, lh = 2 + r() * 4;
       const c = pal[Math.floor(r() * pal.length)];
       W(a, () => {
         a.save(); a.translate(x, y); a.rotate(ang); a.fillStyle = rgb(c[0], c[1], c[2]);
@@ -947,10 +947,28 @@ float gmNoise(vec3 p) {
 }
 `;
 
+/**
+ * The environment map is the sky alone, so a face pointing at the ground
+ * reflects bright horizon haze and a black-doped belly reads pale grey from
+ * below. Real undersides see dark ground: fade image-based light on
+ * downward-facing normals.
+ */
+export const ENV_OCCLUSION = /* glsl */ `
+#include <lights_fragment_maps>
+{
+  vec3 gmWN = inverseTransformDirection(normal, viewMatrix);
+  float gmOcc = mix(0.26, 1.0, smoothstep(-0.8, 0.3, gmWN.y));
+  iblIrradiance *= gmOcc;
+  radiance *= gmOcc;
+}
+`;
+
 const MAP_FRAG = /* glsl */ `
 vec2 gmUv = gmAtlas(vMapUv, vMat.x);
-vec2 gmDx = dFdx(vMapUv) * (${P}.0 / GM_TEX);
-vec2 gmDy = dFdy(vMapUv) * (${P}.0 / GM_TEX);
+// Gradients widened a little: fine periodic detail (corrugations, weave)
+// otherwise sits right at Nyquist at gameplay distances and crawls.
+vec2 gmDx = dFdx(vMapUv) * (${P}.0 * 1.5 / GM_TEX);
+vec2 gmDy = dFdy(vMapUv) * (${P}.0 * 1.5 / GM_TEX);
 vec4 sampledDiffuseColor = textureGrad(map, gmUv, gmDx, gmDy);
 diffuseColor *= sampledDiffuseColor;
 `;
@@ -966,11 +984,11 @@ const NORMAL_FRAG = /* glsl */ `
 const EMBER_FRAG = /* glsl */ `
 {
   // Smouldering wreck: patches glow orange, flicker, and cool over a minute.
-  float heat = smoothstep(0.0, 0.5, uEmberT) * (0.12 + 0.88 * exp(-uEmberT / 14.0));
-  float n = gmNoise(vObj * 1.2 + uSeed) * 0.65 + gmNoise(vObj * 3.3 - uSeed) * 0.35;
-  float flick = 0.72 + 0.28 * sin(uEmberT * 6.0 + n * 25.0);
-  float e = smoothstep(0.56, 0.78, n) * vMat.w * heat * flick;
-  totalEmissiveRadiance += vec3(1.0, 0.34, 0.07) * e * 9.0;
+  float heat = smoothstep(0.0, 0.5, uEmberT) * (0.1 + 0.9 * exp(-uEmberT / 12.0));
+  float n = gmNoise(vObj * 1.4 + uSeed) * 0.6 + gmNoise(vObj * 4.1 - uSeed) * 0.4;
+  float flick = 0.7 + 0.3 * sin(uEmberT * 6.0 + n * 25.0);
+  float e = smoothstep(0.64, 0.8, n) * vMat.w * heat * flick;
+  totalEmissiveRadiance += vec3(1.0, 0.24, 0.035) * e * 3.4;
   diffuseColor.rgb *= 1.0 - 0.6 * e;
 }
 `;
@@ -991,7 +1009,8 @@ function patchUber(mat: THREE.MeshStandardMaterial, wreck: boolean): void {
       .replace('#include <map_fragment>', MAP_FRAG)
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = roughness * vMat.y;')
       .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = metalness * vMat.z;')
-      .replace('#include <normal_fragment_maps>', NORMAL_FRAG);
+      .replace('#include <normal_fragment_maps>', NORMAL_FRAG)
+      .replace('#include <lights_fragment_maps>', ENV_OCCLUSION);
     if (wreck) sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n' + EMBER_FRAG);
   };
   mat.customProgramCacheKey = () => (wreck ? 'gm-uber-wreck' : 'gm-uber');

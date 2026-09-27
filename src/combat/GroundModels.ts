@@ -154,7 +154,7 @@ export function buildGround(kind: GroundKind, side: 'allied' | 'central'): Model
   let lensMat: THREE.MeshStandardMaterial | null = null;
   if (info.lens) {
     lensMat = new THREE.MeshStandardMaterial({
-      color: 0x8c979c, roughness: 0.12, metalness: 0.7, emissive: 0xfff0d2, emissiveIntensity: 0,
+      color: 0x2e3a40, roughness: 0.08, metalness: 0.35, emissive: 0xfff0d2, emissiveIntensity: 0,
     });
     const disc = new THREE.CircleGeometry(info.lens.r, 20);
     const a = new THREE.Mesh(disc, lensMat);
@@ -181,7 +181,6 @@ export function buildGround(kind: GroundKind, side: 'allied' | 'central'): Model
   const updateMuzzle = (): void => {
     if (!muzzle || !muzzleNode || !info.muzzle) return;
     // Compose pivot transforms in body space (independent of the root's world matrix).
-    _m.identity();
     const chain: THREE.Object3D[] = [];
     for (let n: THREE.Object3D | null = muzzleNode; n && n !== near; n = n.parent) chain.unshift(n);
     const acc = new THREE.Matrix4();

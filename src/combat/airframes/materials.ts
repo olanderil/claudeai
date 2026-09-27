@@ -15,6 +15,26 @@ import { flashTexture, propBlurTexture, propTextures } from './props';
  *  - flash  — additive muzzle flash, shared.
  */
 
+/**
+ * The game's environment map is the sky alone, so its lower half is bright
+ * haze where the ground should be: undersides of wings would glow as if lit
+ * from below and every downward reflection would be sky. Fade image-based
+ * light for normals (and reflections) that face the ground; the hemisphere
+ * light still supplies the warm bounce. Appended after three's IBL chunk.
+ */
+const GROUND_OCCLUSION = `#include <lights_fragment_maps>
+{
+  vec3 aoWorldN = inverseTransformDirection( geometryNormal, viewMatrix );
+  iblIrradiance *= mix( 0.3, 1.0, smoothstep( -0.75, 0.35, aoWorldN.y ) );
+  vec3 aoWorldR = inverseTransformDirection( reflect( -geometryViewDir, geometryNormal ), viewMatrix );
+  radiance *= mix( 0.3, 1.0, smoothstep( -0.45, 0.12, aoWorldR.y ) );
+}`;
+
+/** Hook for the shared hardware material: ground occlusion only. */
+function propsHook(shader: THREE.WebGLProgramParametersWithUniforms): void {
+  shader.fragmentShader = shader.fragmentShader.replace('#include <lights_fragment_maps>', GROUND_OCCLUSION);
+}
+
 export interface DamageUniforms {
   uDamage: { value: number };
   uSeed: { value: number };
@@ -39,6 +59,7 @@ function damageHook(this: THREE.Material, shader: THREE.WebGLProgramParametersWi
     .replace('#include <common>', '#include <common>\nvarying vec3 vDmgPos;')
     .replace('#include <begin_vertex>', '#include <begin_vertex>\nvDmgPos = position;');
   shader.fragmentShader = shader.fragmentShader
+    .replace('#include <lights_fragment_maps>', GROUND_OCCLUSION)
     .replace(
       '#include <common>',
       `#include <common>
@@ -64,28 +85,30 @@ float dmgNoise(vec3 p) {
 if (uDamage > 0.002) {
   vec2 m = vMapUv * uMetres;
   float side = vDmgPos.x >= 0.0 ? 0.0 : 31.0;
-  const float CELL = 0.3;
+  const float CELL = 0.36;
   vec2 cell = floor(m / CELL);
-  float hole = 0.0, ring = 0.0, soot = 0.0;
+  float hole = 0.0, fray = 0.0, soot = 0.0;
   for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) {
     vec2 c = cell + vec2(float(dx), float(dy)) + side + uSeed;
     float h = dmgHash(c);
-    if (uDamage < 0.04 + h * 1.2) continue;
-    vec2 centre = (cell + vec2(float(dx), float(dy)) + 0.2 + 0.6 * vec2(dmgHash(c + 3.1), dmgHash(c + 7.7))) * CELL;
+    if (uDamage < 0.05 + h * 1.5) continue;
+    vec2 centre = (cell + vec2(float(dx), float(dy)) + 0.15 + 0.7 * vec2(dmgHash(c + 3.1), dmgHash(c + 7.7))) * CELL;
     vec2 d = m - centre;
-    float tear = step(0.72, dmgHash(c + 9.2)) * smoothstep(0.55, 0.95, uDamage);
-    float r = 0.011 + 0.014 * dmgHash(c + 1.3) + 0.05 * tear;
+    // A few holes open into ragged tears once the machine is badly shot up.
+    float tear = step(0.75, dmgHash(c + 9.2)) * smoothstep(0.5, 0.95, uDamage);
+    float r = 0.009 + 0.012 * dmgHash(c + 1.3) + 0.045 * tear;
     float ang = atan(d.y, d.x);
-    float jag = 1.0 + (0.28 + 0.3 * tear) * sin(ang * 5.0 + h * 40.0) + 0.18 * sin(ang * 11.0 + h * 13.0);
+    float jag = 1.0 + (0.1 + 0.28 * tear) * sin(ang * 7.0 + h * 40.0) + 0.09 * sin(ang * 13.0 + h * 17.0) + 0.07 * sin(ang * 23.0 + h * 5.0);
     float dist = length(d) / (r * jag);
-    hole = max(hole, 1.0 - smoothstep(0.8, 1.0, dist));
-    ring = max(ring, 1.0 - smoothstep(1.0, 2.1, dist));
-    soot = max(soot, 1.0 - smoothstep(1.4, 4.5 + 3.0 * tear, dist));
+    hole = max(hole, 1.0 - smoothstep(0.75, 1.0, dist));
+    fray = max(fray, 1.0 - smoothstep(1.0, 1.7, dist));
+    soot = max(soot, 1.0 - smoothstep(1.3, 4.0 + 3.0 * tear, dist));
   }
   float n = dmgNoise(vDmgPos * 1.6 + uSeed) * 0.65 + dmgNoise(vDmgPos * 4.1) * 0.35;
   float scorch = smoothstep(0.62, 0.9, n + uDamage * 0.45 - 0.2) * smoothstep(0.3, 1.0, uDamage);
-  diffuseColor.rgb *= 1.0 - 0.4 * soot;
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.5 + vec3(0.02, 0.017, 0.012), ring * 0.75);
+  diffuseColor.rgb *= 1.0 - 0.35 * soot;
+  // Frayed edges show raw, undoped linen.
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42, 0.37, 0.28), fray * (1.0 - hole) * 0.6);
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.028, 0.026), scorch * 0.85);
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.006, 0.005, 0.004), hole);
 }
@@ -114,9 +137,10 @@ export function skinMaterial(maps: SkinMaps): THREE.MeshPhysicalMaterial {
     roughness: 1,
     metalness: 1,
     vertexColors: true,
-    // Doped linen has a soft satin sheen rather than a gloss coat.
-    clearcoat: 0.18,
-    clearcoatRoughness: 0.55,
+    // Doped linen is satin, not gloss: a clear coat (or the full dielectric
+    // Fresnel) turns it to grey plastic against a bright sky at grazing
+    // angles. A weaker specular layer keeps the sheen without the silver.
+    specularIntensity: 0.5,
     // The sky-only environment lights undersides from below as if the ground
     // were sky; keep its share of the diffuse modest.
     envMapIntensity: 0.55,
@@ -151,6 +175,7 @@ export function propsMaterial(): THREE.MeshStandardMaterial {
     metalness: 1,
     vertexColors: true,
   });
+  props.onBeforeCompile = propsHook;
   return props;
 }
 
@@ -193,7 +218,7 @@ export function flashMaterial(): THREE.MeshBasicMaterial {
   flash = new THREE.MeshBasicMaterial({
     map: flashTexture(),
     // HDR colour: over the bloom threshold, but a finite, sane number.
-    color: new THREE.Color(5.5, 3.6, 1.6),
+    color: new THREE.Color(6.0, 3.1, 1.1),
     blending: THREE.AdditiveBlending,
     transparent: true,
     depthWrite: false,

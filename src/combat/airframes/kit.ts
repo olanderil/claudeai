@@ -1,5 +1,7 @@
 import * as THREE from 'three';
-import { Geo, v3, type V3, type UVRect } from './geo';
+import { Geo, rgb, v3, type V3, type UVRect } from './geo';
+
+const WOOD = rgb('#7a4d2e');
 import type { SkinAtlas } from './atlas';
 import { PR, type PropRegion } from './props';
 
@@ -85,6 +87,10 @@ export class Kit {
   /** Hardware from the props atlas. */
   props(g: Geo, region: PropRegion | UVRect, node = 'static', hit?: string): void {
     if (this.detail > 0) {
+      // Parts that take their colour from the atlas (laminated wood) need it in the vertices instead.
+      if (region === 'lam' || region === 'wood' || region === 'ply') {
+        for (let q = 0; q < g.c.length; q += 3) { g.c[q] *= WOOD[0]; g.c[q + 1] *= WOOD[1]; g.c[q + 2] *= WOOD[2]; }
+      }
       g.pin(this.atlas.region('swatch', 'swatch'), 0.025, 0.025);
       this.put('static', 'skin', g, hit);
       return;

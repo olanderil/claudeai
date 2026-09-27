@@ -20,7 +20,7 @@ import type { Fuselage } from './fuselage';
 export const COL = {
   steel: rgb('#8d8f90'),
   darkSteel: rgb('#3c3d3e'),
-  gun: rgb('#2c2d2e'),
+  gun: rgb('#1c1c1c'),
   black: rgb('#1a1918'),
   brass: rgb('#c09a52'),
   copper: rgb('#b36e45'),
@@ -89,7 +89,7 @@ export function wingPair(k: Kit, w: WingSpec): WingOut {
     top, bot,
     ds: k.detail === 0 ? 0.16 : k.detail === 1 ? 0.7 : (w.s1 - w.s0) / 1.5,
     nF: k.n(11, 4, 2), nA: k.n(5, 2, 1),
-    capRoot: w.capRoot, tipZone: w.tipZone ?? 0.3,
+    capRoot: w.capRoot, tipZone: k.detail === 2 ? 1e-4 : w.tipZone ?? 0.3,
   };
   const out = buildPanel(spec);
   const sides: (1 | -1)[] = w.pair === false ? [1] : [1, -1];
@@ -141,7 +141,7 @@ export function tailSurface(k: Kit, t: TailSpec): WingOut {
     moving: k.detail === 0 ? t.moving : false,
     ds: k.detail === 0 ? 0.08 : k.detail === 1 ? 0.35 : (t.s1 - t.s0) / 1.5,
     nF: k.n(9, 3, 2), nA: k.n(4, 2, 1),
-    tipZone: 0.15, rootZone: t.moving ? 0.12 : undefined, minThick: 0.003,
+    tipZone: k.detail === 2 ? 1e-4 : 0.15, rootZone: t.moving && k.detail < 2 ? 0.12 : undefined, minThick: 0.003,
   };
   const out = buildPanel(spec);
   const mats = vertical ? [finMatrix(t.origin, t.rake ?? 0)] : [panelMatrix(t.origin, 0, 0), panelMatrix(t.origin, 0, 0, true)];
@@ -162,8 +162,15 @@ export function tailSurface(k: Kit, t: TailSpec): WingOut {
 
 // ---------------------------------------------------------------- struts & rigging
 
-export function woodStrut(k: Kit, a: V3, b: V3, chord: number, col: RGB = COL.wood, thick = 0.3, hit?: string, region: 'wood' | 'paint' | 'steel' = 'wood'): void {
-  k.props(strut(a, b, chord, thick, col, { m: k.n(6, 3, 2) }), region, 'static', hit);
+/**
+ * Streamlined strut. `region` 'livery' paints it from the skin atlas (the
+ * 'struts' swatch region, which every livery using it must fill) so struts can
+ * follow the paint scheme — a red Dr.I has red struts.
+ */
+export function woodStrut(k: Kit, a: V3, b: V3, chord: number, col: RGB = COL.wood, thick = 0.3, hit?: string, region: 'wood' | 'paint' | 'steel' | 'livery' = 'wood'): void {
+  const g = strut(a, b, chord, thick, region === 'livery' ? WHITE_ : col, { m: k.n(6, 3, 2) });
+  if (region === 'livery') k.skin(g.pin(k.atlas.region('struts', 'swatch'), 0.02, 0.02), 'static', hit);
+  else k.props(g, region, 'static', hit);
 }
 
 /** Streamlined steel "Rafwire", doubled for flying wires. */
@@ -203,10 +210,12 @@ export interface GearSpec {
   /** Aerofoil fairing on the axle (Dr.I "fourth wing"). */
   axleWing?: { chord: number; region: SkinRegion };
   hit: string;
+  /** Node for the rolling wheels (default 'wheels', which the rig spins). */
+  node?: string;
 }
 
 export function landingGear(k: Kit, g: GearSpec): V3 {
-  const node = k.node('wheels', v3(0, g.y, g.z), { axis: v3(1, 0, 0) });
+  const node = k.node(g.node ?? 'wheels', v3(0, g.y, g.z), { axis: v3(1, 0, 0) });
   const cover = k.atlas.region('wheel', 'disc', { r: g.r - g.tyre * 1.6 });
   for (const side of [1, -1]) {
     const cx = side * g.track / 2;
@@ -360,7 +369,8 @@ export interface PropSpec {
   /** Tractor (default) pulls, pusher sits behind the engine; rotation direction ±1. */
   dir?: 1 | -1;
   bossR?: number;
-  spinner?: { r: number; len: number; region?: SkinRegion; col?: RGB };
+  /** Spinner: base radius r at hub.z + back (default just behind the boss), pointed tip len ahead of the base. */
+  spinner?: { r: number; len: number; back?: number; col?: RGB; livery?: boolean };
   tipBrass?: boolean;
 }
 
@@ -392,7 +402,7 @@ export function propeller(k: Kit, p: PropSpec): void {
     return v3(ar * dir, r, wr);
   };
   const nx = k.n(22, 7, 4), nt = k.n(12, 4, 2);
-  if (k.detail < 2) {
+  if (k.detail === 0) {
     const blade = new Geo();
     const brass = new Geo();
     const eps = 1e-3;
@@ -444,15 +454,19 @@ export function propeller(k: Kit, p: PropSpec): void {
   }
   if (p.spinner) {
     const sr = p.spinner.r, sl = p.spinner.len;
+    const base = p.spinner.back ?? zmin + 0.03;
     const prof: [number, number][] = [];
-    const n = k.n(10, 5, 3);
+    const n = k.n(12, 5, 3);
     for (let q = 0; q <= n; q++) {
+      // Ogive: pointed tip, full radius at the base.
       const t = q / n;
-      prof.push([sr * Math.sqrt(Math.max(0, 1 - (1 - t) ** 2.2)), zmin - sl * (1 - t)]);
+      prof.push([sr * Math.pow(Math.sin((t * Math.PI) / 2), 0.75), base - sl * (1 - t)]);
     }
-    prof.push([sr, zmin + 0.03]);
-    const sp = lathe(prof, k.n(24, 12, 8), { col: p.spinner.col ?? COL.white }).transform(mat(p.hub));
-    k.props(sp, 'paint', node);
+    prof.push([sr * 0.97, base + 0.01]);
+    const sp = lathe(prof, k.n(24, 12, 8), { col: p.spinner.livery ? WHITE_ : p.spinner.col ?? COL.white }).transform(mat(p.hub));
+    // Spinners were a favourite place for unit colours: let the livery paint it.
+    if (p.spinner.livery) k.skin(sp.pin(k.atlas.region('spinner', 'swatch'), 0.02, 0.02), node);
+    else k.props(sp, 'paint', node);
   }
   // Blurred disc (own node so it can turn independently of the blades).
   const dnode = k.node(`disc${p.id}`, p.hub, { axis: v3(0, 0, -1), flags: { noShadow: true } });
@@ -470,9 +484,17 @@ export function vickers(k: Kit, rear: V3, o: { node?: string; left?: boolean } =
   const g = (geo: Geo, reg: Parameters<Kit['props']>[1]): void => k.props(geo.transform(mat(rear)), reg, node, 'fus');
   g(box(0.1, 0.135, 0.4, COL.gun).transform(mat([0, 0, -0.2])), 'gun');
   if (k.detail === 0) {
-    g(box(0.024, 0.03, 0.11, COL.steel).transform(mat([(o.left ? -1 : 1) * 0.062, 0.02, -0.1])), 'steel'); // cocking handle
-    g(box(0.05, 0.04, 0.06, COL.gun).transform(mat([(o.left ? 1 : -1) * 0.07, -0.02, -0.28])), 'gun'); // feed block
-    g(cyl(0.016, 0.016, 0, 0.05, 8, COL.gun).transform(mat([0, 0, 0])), 'gun');
+    const out = o.left ? -1 : 1;
+    g(box(0.086, 0.012, 0.36, COL.gun).transform(mat([0, 0.073, -0.2])), 'gun'); // top cover
+    g(box(0.112, 0.15, 0.02, COL.gun).transform(mat([0, 0, -0.01])), 'gun'); // rear plate
+    // Crank handle on the outboard side: the lever the pilot clears stoppages with.
+    g(tube([v3(out * 0.056, 0.0, -0.06), v3(out * 0.075, 0.0, -0.06), v3(out * 0.075, -0.07, 0.0)], 0.009, 5, COL.steel), 'steel');
+    g(ellipsoid(0.014, 0.014, 0.022, 6, 4, COL.black).transform(mat([out * 0.075, -0.075, 0.01])), 'gloss');
+    g(box(0.05, 0.045, 0.07, COL.gun).transform(mat([-out * 0.07, -0.015, -0.3])), 'gun'); // feed block
+    // Belt chute curling down into the fuselage.
+    g(tube([v3(-out * 0.09, -0.03, -0.3), v3(-out * 0.1, -0.1, -0.29), v3(-out * 0.08, -0.2, -0.26)], 0.02, 4, rgb('#4a3f2c')), 'cloth');
+    g(cyl(0.022, 0.022, -0.05, 0.02, 8, COL.brass).transform(new THREE.Matrix4().makeRotationY(Math.PI / 2)).transform(mat([out * 0.05, -0.04, -0.33])), 'brass'); // CC gear trigger motor
+    g(cyl(0.016, 0.016, 0, 0.05, 8, COL.gun), 'gun');
   }
   g(cyl(0.043, 0.043, -0.95, -0.4, k.n(14, 6, 4), COL.gun, false).transform(mat([0, 0, 0])), k.detail === 0 ? 'perf' : 'gun');
   g(cyl(0.043, 0.03, -0.99, -0.95, k.n(14, 6, 4), COL.gun), 'gun');
@@ -496,9 +518,9 @@ export function spandau(k: Kit, rear: V3, o: { node?: string; left?: boolean } =
   return rear.clone().add(v3(0, 0, -1.09));
 }
 
-/** Lewis gun (observer): finned radiator shroud, pan magazine, spade grip. Local: pivot at origin, points -Z. */
-export function lewis(k: Kit, node: string, origin: V3): V3 {
-  const g = (geo: Geo, reg: Parameters<Kit['props']>[1]): void => k.props(geo.transform(mat(origin)), reg, node, 'fus');
+/** Lewis gun (observer): finned radiator shroud, pan magazine, spade grip. Built pointing -Z from its pivot, then placed. Returns the muzzle. */
+export function lewis(k: Kit, node: string, place: THREE.Matrix4): V3 {
+  const g = (geo: Geo, reg: Parameters<Kit['props']>[1]): void => k.props(geo.transform(place), reg, node, 'fus');
   g(box(0.07, 0.1, 0.34, COL.gun).transform(mat([0, 0, 0.04])), 'gun');
   g(cyl(0.056, 0.056, -0.78, -0.14, k.n(18, 8, 4), rgb('#5a5c58')), k.detail === 0 ? 'fins' : 'gun');
   g(cyl(0.056, 0.016, -0.86, -0.78, k.n(14, 8, 4), rgb('#5a5c58')), 'gun');
@@ -511,25 +533,25 @@ export function lewis(k: Kit, node: string, origin: V3): V3 {
     g(tube([v3(-0.05, -0.08, 0.2), v3(-0.05, 0.02, 0.24), v3(0.05, 0.02, 0.24), v3(0.05, -0.08, 0.2)], 0.012, 6, COL.leather), 'leather');
     g(box(0.02, 0.1, 0.02, COL.steel).transform(mat([0, 0.06, -0.2])), 'steel'); // foresight post
   }
-  return origin.clone().add(v3(0, 0, -0.96));
+  return v3(0, 0, -0.96).applyMatrix4(place);
 }
 
 /** Parabellum MG14 (German observer): slim perforated jacket, drum on the side, stock. */
-export function parabellum(k: Kit, node: string, origin: V3): V3 {
-  const g = (geo: Geo, reg: Parameters<Kit['props']>[1]): void => k.props(geo.transform(mat(origin)), reg, node, 'fus');
+export function parabellum(k: Kit, node: string, place: THREE.Matrix4): V3 {
+  const g = (geo: Geo, reg: Parameters<Kit['props']>[1]): void => k.props(geo.transform(place), reg, node, 'fus');
   g(box(0.07, 0.11, 0.36, COL.gun).transform(mat([0, 0, 0.02])), 'gun');
   g(cyl(0.032, 0.032, -0.82, -0.16, k.n(12, 6, 4), COL.gun, false), k.detail === 0 ? 'perf' : 'gun');
   g(cyl(0.022, 0.016, -0.9, -0.82, 8, COL.gun), 'gun');
   g(cyl(0.11, 0.11, -0.035, 0.035, k.n(20, 8, 6), COL.gun).transform(new THREE.Matrix4().makeRotationY(Math.PI / 2)).transform(mat([-0.09, 0, -0.02])), 'gun');
   g(box(0.045, 0.1, 0.3, COL.woodDark).transform(mat([0, -0.03, 0.34])), 'wood');
-  return origin.clone().add(v3(0, 0, -0.91));
+  return v3(0, 0, -0.91).applyMatrix4(place);
 }
 
 /** Additive star: three crossed quads along the barrel plus a disc facing it. */
 export function muzzleFlash(k: Kit, at: V3, name: string, parent?: string, dir: V3 = v3(0, 0, -1)): void {
   const node = k.node(name, at, { parent, flags: { always: !parent, noShadow: true } });
   const g = new Geo();
-  const L = 0.55, W = 0.22;
+  const L = 0.75, W = 0.3;
   for (let q = 0; q < 3; q++) {
     const a = (q / 3) * Math.PI;
     const ux = Math.cos(a) * W, uy = Math.sin(a) * W;
@@ -588,7 +610,8 @@ export function figure(k: Kit, f: FigureSpec): { neck: V3 } {
   putH(ellipsoid(0.084, 0.106, 0.101, hs, k.n(6, 3, 2), helmet, { t0: 0, t1: 1.1 }).transform(mat([0, 0.014, 0.068])), 'leather');
   putH(ellipsoid(0.084, 0.106, 0.101, hs, k.n(8, 4, 2), helmet, { t0: 1.1, t1: 2.25, p0: -Math.PI + 0.8, p1: Math.PI - 0.8 }).transform(mat([0, 0.014, 0.068])), 'leather');
   // Neck, collar, scarf wrap, coat.
-  put(cyl(0.05, 0.055, -0.1, 0.08, hs, COL.skin, false).transform(new THREE.Matrix4().makeRotationX(Math.PI / 2)).transform(mat([0, -0.11, 0.085])), 'face');
+  // Neck wound in the scarf: from behind a bare neck looks wrong.
+  put(cyl(0.056, 0.06, -0.1, 0.06, hs, f.scarf ?? COL.silk, false).transform(new THREE.Matrix4().makeRotationX(Math.PI / 2)).transform(mat([0, -0.11, 0.085])), 'silk');
   put(torus(0.07, 0.03, hs, 8, f.scarf ?? COL.silk).transform(new THREE.Matrix4().makeRotationX(Math.PI / 2)).transform(mat([0, -0.15, 0.08])), 'silk');
   put(torus(0.1, 0.045, hs, 8, COL.fur).transform(new THREE.Matrix4().makeRotationX(Math.PI / 2)).transform(mat([0, -0.2, 0.09])), 'fur');
   put(ellipsoid(0.215, 0.3, 0.14, hs, vs, coat).transform(mat([0, -0.46, 0.11])), 'leather');
@@ -622,7 +645,7 @@ export function windscreen(k: Kit, c: V3, w: number, h: number, tilt: number): v
   const shape: [number, number][] = [[-w / 2, 0], [w / 2, 0], [w / 2 * 0.85, h], [-w / 2 * 0.85, h]];
   k.glass(plate(shape, 0.004).transform(m));
   const frame = [v3(-w / 2, 0, 0), v3(-w / 2 * 0.85, h, 0), v3(w / 2 * 0.85, h, 0), v3(w / 2, 0, 0)].map((p) => p.applyMatrix4(m));
-  k.props(tube(frame, 0.006, 5, COL.brass), 'brass');
+  k.props(tube(frame, 0.004, 5, COL.black), 'paint');
 }
 
 /** Aldis telescopic sight between `a` (rear) and `b` (front). */
@@ -662,18 +685,20 @@ export interface BoardDial {
  * Instrument board: varnished plywood cut to the fuselage section at z, with
  * bezelled, glazed dials. Only exists in the cockpit node.
  */
-export function instrumentBoard(k: Kit, fus: Fuselage, z: number, yBottom: number, dials: BoardDial[], node = 'cockpit'): void {
+export function instrumentBoard(k: Kit, fus: Fuselage, z: number, yBottom: number, yTop: number, dials: BoardDial[], node = 'cockpit'): void {
   if (k.detail > 0) return;
+  // Cut to the inside of the fuselage section, clipped below the gun breeches.
   const d = fus.dense(z, 48).filter(([, y]) => y > yBottom);
-  const shape: [number, number][] = d.map(([x, y]) => [x * 0.96, y - 0.012]);
+  const shape: [number, number][] = d.map(([x, y]) => [x * 0.96, Math.min(yTop, y - 0.012)]);
   const left = [...shape].reverse().map(([x, y]) => [-x, y] as [number, number]);
   const outline = [...shape, [shape[shape.length - 1][0], yBottom] as [number, number], [-shape[shape.length - 1][0], yBottom] as [number, number], ...left.slice(0, -1)];
   const g = plate(outline.filter((p, i, a) => i === 0 || Math.hypot(p[0] - a[i - 1][0], p[1] - a[i - 1][1]) > 1e-4), 0.012, COL.wood);
   // Planar uvs across the board for the plywood grain.
-  for (let q = 0; q < g.count; q++) { g.t[q * 2] = 0.5 + g.p[q * 3] * 1.2; g.t[q * 2 + 1] = 0.5 + g.p[q * 3 + 1] * 1.2; }
+  for (let q = 0; q < g.count; q++) { g.t[q * 2] = 0.5 + g.p[q * 3] * 0.45; g.t[q * 2 + 1] = 0.5 + g.p[q * 3 + 1] * 0.45; }
   k.props(g.transform(mat([0, 0, z])), 'ply', node);
   for (const dl of dials) {
-    const zf = z - 0.008;
+    // The pilot is aft (+Z): dials stand proud of the board's rear face.
+    const zf = z + 0.008;
     const face = disc(dl.r, 24).transform(mat([dl.x, dl.y, zf]));
     // disc() faces +Z already (toward the pilot); uv 0..1 across.
     k.props(face, dialRect(DIAL[dl.dial]), node);
@@ -682,8 +707,8 @@ export function instrumentBoard(k: Kit, fus: Fuselage, z: number, yBottom: numbe
   }
   // Magneto switches and a fuel tap: little brass things the eye expects.
   for (let q = 0; q < 2; q++) {
-    k.props(box(0.03, 0.04, 0.02, COL.black).transform(mat([-0.2 + q * 0.05, yBottom + 0.05, z - 0.012])), 'paint', node);
-    k.props(cyl(0.004, 0.004, 0, 0.03, 5, COL.brass).transform(mat([-0.2 + q * 0.05, yBottom + 0.06, z - 0.05])), 'brass', node);
+    k.props(box(0.03, 0.04, 0.02, COL.black).transform(mat([-0.2 + q * 0.05, yBottom + 0.05, z + 0.016])), 'paint', node);
+    k.props(cyl(0.004, 0.004, 0, 0.03, 5, COL.brass).transform(mat([-0.2 + q * 0.05, yBottom + 0.06, z + 0.026])), 'brass', node);
   }
 }
 
@@ -717,7 +742,55 @@ export function radiator(k: Kit, c: V3, w: number, h: number, d: number, face: V
   k.props(box(w, h, d, frame).transform(new THREE.Matrix4().makeTranslation(0, 0, d / 2)).transform(m), 'paint', 'static', 'fus');
   const core = plate([[-w / 2 + 0.02, -h / 2 + 0.02], [w / 2 - 0.02, -h / 2 + 0.02], [w / 2 - 0.02, h / 2 - 0.02], [-w / 2 + 0.02, h / 2 - 0.02]], 0.004, COL.white);
   for (let q = 0; q < core.count; q++) { core.t[q * 2] = (core.p[q * 3] + w / 2) / w; core.t[q * 2 + 1] = (core.p[q * 3 + 1] + h / 2) / h; }
-  k.props(core.color(rgb('#8a8378')).transform(new THREE.Matrix4().makeTranslation(0, 0, -0.003)).transform(m), 'radiator', 'static', 'fus');
+  k.props(core.color(rgb('#8c7550')).transform(new THREE.Matrix4().makeTranslation(0, 0, -0.003)).transform(m), 'radiator', 'static', 'fus');
 }
 
 export { PR };
+
+export interface RingSpec {
+  /** Ring centre (on the coaming), body space. */
+  centre: V3;
+  R: number;
+  gun: 'lewis' | 'parabellum';
+  /** Node names; the rest pose faces the tail unless `forward`. */
+  yaw: string;
+  pitch: string;
+  flash: string;
+  forward?: boolean;
+  /** Observer's eye height above the ring. */
+  eyeUp?: number;
+  coat?: RGB;
+}
+
+/**
+ * Scarff-style gun ring: the ring is fixed to the coaming, the carriage, arch,
+ * gun and gunner all turn with it (yaw node), and the gun elevates on its own
+ * pivot (pitch node). The gunner is a figure facing along the gun.
+ * Returns the gun pivot (where rounds leave from) and the muzzle.
+ */
+export function gunRing(k: Kit, o: RingSpec): { pivot: V3; muzzle: V3 } {
+  const c = o.centre;
+  k.props(torus(o.R, 0.024, k.n(40, 16, 8), k.n(8, 4, 3), COL.woodDark).transform(new THREE.Matrix4().makeRotationX(Math.PI / 2)).transform(mat(c)), 'wood', 'static', 'fus');
+  const fwd = o.forward ? -1 : 1; // +1: rest pose points aft (+Z)
+  const yaw = k.node(o.yaw, c, { axis: v3(0, 1, 0) });
+  const pivot = c.clone().add(v3(0, 0.36, fwd * o.R * 0.55));
+  const pitch = k.node(o.pitch, pivot, { parent: yaw, axis: v3(1, 0, 0) });
+  // Carriage on the ring and the arch up to the gun pivot.
+  const foot = c.clone().add(v3(0, 0.02, fwd * o.R));
+  k.props(box(0.14, 0.05, 0.08, COL.darkSteel).transform(mat(foot)), 'steel', yaw);
+  if (k.detail === 0) {
+    const arch = [foot.clone().add(v3(-0.06, 0.02, 0)), pivot.clone().add(v3(-0.05, -0.02, 0))];
+    const arch2 = [foot.clone().add(v3(0.06, 0.02, 0)), pivot.clone().add(v3(0.05, -0.02, 0))];
+    k.props(tube(arch, 0.012, 5, COL.darkSteel), 'steel', yaw);
+    k.props(tube(arch2, 0.012, 5, COL.darkSteel), 'steel', yaw);
+  }
+  // The gun, built pointing -Z and turned to the rest direction.
+  const place = mat(pivot).multiply(o.forward ? new THREE.Matrix4() : new THREE.Matrix4().makeRotationY(Math.PI));
+  const muzzle = o.gun === 'lewis' ? lewis(k, pitch, place) : parabellum(k, pitch, place);
+  muzzleFlash(k, muzzle, o.flash, pitch, v3(0, 0, fwd));
+  figure(k, {
+    eye: c.clone().add(v3(0, o.eyeUp ?? 0.5, -fwd * 0.12)), node: `${o.yaw}Crew`, parent: yaw,
+    yaw: o.forward ? 0 : Math.PI, coat: o.coat,
+  });
+  return { pivot, muzzle };
+}

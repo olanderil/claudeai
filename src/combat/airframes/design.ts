@@ -20,6 +20,8 @@ export interface DesignMeta {
   gunner: { yaw: string; pitch: string; flash: string } | null;
   /** Forward-gun flash node names, matching `muzzles`. */
   flashes: string[];
+  /** Other gunners' flashes, fired together with the rear gunner (Gotha nose gun). */
+  auxFlashes?: string[];
 }
 
 export interface Design {

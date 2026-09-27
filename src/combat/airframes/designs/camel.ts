@@ -8,7 +8,7 @@ import {
 } from '../parts';
 import { axleY, groundY, type Design, type DesignMeta } from '../design';
 import {
-  C, Painter, chips, crossPattee, mud, rfcRoundel, smudge, soot, streaks, text, type FusMeta,
+  C, Painter, chips, crossPattee, fusRect, mud, rfcRoundel, smudge, soot, streaks, text, type FusMeta,
 } from '../livery';
 import { roundedEdge } from '../panel';
 
@@ -31,18 +31,21 @@ const L_Y = -0.52;
 const DIH = (5 * Math.PI) / 180;
 const THRUST_Y = 0.02;
 
+// Flat-sided box up to the top longerons (the shoulder, y ≈ 0.26), a low
+// stringered decking over it, the gun hump in front of the cockpit, and a
+// round section at the firewall to fair into the cowl.
 const KEYS: FusKey[] = [
-  { z: -0.78, w: 0.4, top: 0.4, bot: -0.38, sh: 0.01, nt: 2.0, nb: 2.2 },
-  { z: -0.55, w: 0.405, top: 0.37, bot: -0.46, sh: 0.04, nt: 2.4, nb: 4, hump: 0.14, hw: 0.26 },
-  { z: -0.3, w: 0.405, top: 0.36, bot: -0.5, sh: 0.06, nt: 2.8, nb: 6, hump: 0.24, hw: 0.28 },
-  { z: 0.0, w: 0.4, top: 0.35, bot: -0.5, sh: 0.06, nt: 3, nb: 7, hump: 0.27, hw: 0.28 },
-  { z: 0.24, w: 0.395, top: 0.34, bot: -0.49, sh: 0.06, nt: 3, nb: 7, hump: 0.17, hw: 0.27 },
-  { z: 0.45, w: 0.39, top: 0.335, bot: -0.48, sh: 0.06, nt: 3, nb: 7, hump: 0.03, hw: 0.26 },
-  { z: 0.7, w: 0.383, top: 0.33, bot: -0.47, sh: 0.06, nt: 2.8, nb: 7, hump: 0 },
-  { z: 1.2, w: 0.36, top: 0.325, bot: -0.43, sh: 0.05, nt: 2.4, nb: 7 },
-  { z: 2.2, w: 0.26, top: 0.28, bot: -0.33, sh: 0.04, nt: 2.3, nb: 7 },
-  { z: 3.2, w: 0.12, top: 0.225, bot: -0.23, sh: 0.02, nt: 2.2, nb: 7 },
-  { z: 3.77, w: 0.012, top: 0.2, bot: -0.18, sh: 0.0, nt: 2.2, nb: 7 },
+  { z: -0.78, w: 0.4, top: 0.41, bot: -0.39, sh: 0.01, nt: 2.0, nb: 2.0 },
+  { z: -0.5, w: 0.405, top: 0.37, bot: -0.47, sh: 0.14, nt: 2.1, nb: 4, hump: 0.16, hw: 0.26 },
+  { z: -0.25, w: 0.405, top: 0.36, bot: -0.5, sh: 0.24, nt: 2, nb: 7, hump: 0.24, hw: 0.28 },
+  { z: 0.0, w: 0.4, top: 0.35, bot: -0.5, sh: 0.26, nt: 2, nb: 8, hump: 0.27, hw: 0.28 },
+  { z: 0.2, w: 0.395, top: 0.345, bot: -0.49, sh: 0.26, nt: 2, nb: 8, hump: 0.13, hw: 0.27 },
+  { z: 0.3, w: 0.393, top: 0.342, bot: -0.485, sh: 0.26, nt: 2, nb: 8, hump: 0, hw: 0.26 },
+  { z: 0.7, w: 0.383, top: 0.34, bot: -0.47, sh: 0.255, nt: 2, nb: 8 },
+  { z: 1.2, w: 0.36, top: 0.335, bot: -0.43, sh: 0.25, nt: 2, nb: 8 },
+  { z: 2.2, w: 0.26, top: 0.29, bot: -0.33, sh: 0.2, nt: 2, nb: 8 },
+  { z: 3.2, w: 0.12, top: 0.23, bot: -0.23, sh: 0.14, nt: 2, nb: 8 },
+  { z: 3.77, w: 0.012, top: 0.2, bot: -0.18, sh: 0.1, nt: 2, nb: 8 },
 ];
 const FUS = new Fuselage(KEYS);
 const COCKPIT = { z0: 0.3, z1: 0.98, hw: 0.28 };
@@ -70,8 +73,8 @@ export const camel: Design = {
   build(k: Kit): DesignMeta {
     const at = k.atlas;
     // ---- fuselage
-    const fusR = at.region('fus_R', 'fus', { fus: FUS, side: 'R', fabricFrom: 0.95, panelSeams: [-0.76, -0.45, -0.1, 0.25, 0.95], formers: [1.5, 2.1, 2.7, 3.3], stringerArcs: [0, 0.07, 0.14, 0.21, 0.28, 0.35] } satisfies FusMeta as unknown as Record<string, unknown>);
-    const fusL = at.region('fus_L', 'fus', { fus: FUS, side: 'L', fabricFrom: 0.95, panelSeams: [-0.76, -0.45, -0.1, 0.25, 0.95], formers: [1.5, 2.1, 2.7, 3.3], stringerArcs: [0, 0.07, 0.14, 0.21, 0.28, 0.35] } satisfies FusMeta as unknown as Record<string, unknown>);
+    const fusR = at.region('fus_R', 'fus', { fus: FUS, side: 'R', fabricFrom: 0.95, panelSeams: [-0.76, -0.45, -0.1, 0.25, 0.95], formers: [1.5, 2.1, 2.7, 3.3], stringerArcs: [0, 0.08, 0.16, 0.24, 0.32, 0.4] } satisfies FusMeta as unknown as Record<string, unknown>);
+    const fusL = at.region('fus_L', 'fus', { fus: FUS, side: 'L', fabricFrom: 0.95, panelSeams: [-0.76, -0.45, -0.1, 0.25, 0.95], formers: [1.5, 2.1, 2.7, 3.3], stringerArcs: [0, 0.08, 0.16, 0.24, 0.32, 0.4] } satisfies FusMeta as unknown as Record<string, unknown>);
     const f = buildFuselage(FUS, { keys: KEYS, openings: [COCKPIT], right: fusR, left: fusL, dz: k.n(0.07, 0.3, 0.9), m: k.n(18, 7, 4), capFront: true }, COL.interior);
     k.skin(f.outer, 'static', 'fus');
     if (k.detail === 0) {
@@ -256,6 +259,7 @@ export const camel: Design = {
     p.fill('cowl', livery === 'standard' ? C.pc10dark : C.pc10dark);
     p.fill('wheel', livery === 'standard' ? pc10 : pc10);
     p.surface('cowl', 0.42, 0);
+    for (const side of ['R', 'L'] as const) p.surface(`fus_${side}`, 0.5, 0, fusRect(FUS, side, FUS.z0, 0.3));
 
     // Common markings on the fuselage.
     const letter = livery === 'ace' ? 'B' : livery === 'flight' ? 'C' : 'A';
@@ -348,7 +352,7 @@ export const camel: Design = {
       smudge(p, `fus_${side}`, hx, hy, 0.2, 0.08, 0.25);
       mud(p, `fus_${side}`, 0, 6, vBot - 0.05, vBot + 0.3, 90, 11);
     }
-    chips(p, 'cowl', -2, 4, 0.12, 0.22, 320, 21);
+    chips(p, 'cowl', -2, 4, 0.12, 0.22, 150, 21);
     chips(p, 'cowl', -2, 4, 0.22, 0.7, 18, 22);
     mud(p, 'L_bot', 0.3, 1.6, 0, 1.37, 120, 12);
     streaks(p, 'L_bot', 0.3, 0.9, 0.0, 1.2, 1, 0.8, { count: 20, alpha: 0.3, seed: 8 });

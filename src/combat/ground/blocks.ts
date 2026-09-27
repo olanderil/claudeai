@@ -12,27 +12,27 @@ export const PAL = {
   allied: {
     body: 0x59593a, // khaki-green service drab
     body2: 0x6b6444,
-    canvas: 0xa8996f,
-    canvasDark: 0x857a58,
+    canvas: 0x877c58,
+    canvasDark: 0x7a7152,
     sandbag: 0xa7926a,
-    tent: 0xc6b994,
+    tent: 0xa99d7c,
     metal: 0x3d3f36,
   },
   central: {
     body: 0x5f6557, // Feldgrau
     body2: 0x4a5540, // dunkelgrün
-    canvas: 0x8e8c75,
-    canvasDark: 0x747461,
+    canvas: 0x777660,
+    canvasDark: 0x6c6c5a,
     sandbag: 0x978c6e,
-    tent: 0x8c8b72,
+    tent: 0x7c7a60,
     metal: 0x363a33,
   },
 } as const;
 
 export const COL = {
-  earth: 0x5f5140,
-  earthDark: 0x4a3f31,
-  turf: 0x5d6a3a,
+  earth: 0x7a6a55,
+  earthDark: 0x665846,
+  turf: 0x7a7c50,
   timber: 0x8a6c4a,
   timberDark: 0x5a4632,
   steel: 0x2f3133,
@@ -47,7 +47,7 @@ export const COL = {
   concrete: 0x9a978c,
 } as const;
 
-export const SAND = (side: Side): PartOpts => ({ color: PAL[side].sandbag, tile: TILE.SANDBAG, scale: 1.2, rough: 0.97, jitter: 0.04, ember: 0.3 });
+export const SAND = (side: Side): PartOpts => ({ color: PAL[side].sandbag, tile: TILE.SANDBAG, scale: 1.2, rough: 0.97, jitter: 0.04, ember: 0.04 });
 export const PAINT = (c: number, rough = 0.7, metal = 0.1): PartOpts => ({ color: c, tile: TILE.PAINT, scale: 1.5, rough, metal });
 export const WOOD = (c: number = COL.timber): PartOpts => ({ color: c, tile: TILE.BOARDS, scale: 1.2, rough: 0.9, ember: 1 });
 export const ROPE: PartOpts = { color: COL.rope, tile: TILE.PAINT, rough: 1, jitter: 0.02, ember: 0.6 };

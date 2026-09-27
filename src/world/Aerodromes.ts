@@ -47,11 +47,11 @@ function gable(w: number, h: number, d: number, y: number, c: THREE.Color): THRE
   return paint(g, c);
 }
 
-const IRON = new THREE.Color(0.20, 0.22, 0.19);
+const IRON = new THREE.Color(0.10, 0.11, 0.095);
 const TIMBER = new THREE.Color(0.20, 0.15, 0.10);
 const TAR = new THREE.Color(0.10, 0.10, 0.10);
-const CANVAS = new THREE.Color(0.66, 0.62, 0.50);
-const CANVAS_DARK = new THREE.Color(0.50, 0.46, 0.36);
+const CANVAS = new THREE.Color(0.46, 0.43, 0.34);
+const CANVAS_DARK = new THREE.Color(0.36, 0.33, 0.25);
 const DRUM = new THREE.Color(0.24, 0.26, 0.20);
 const WHITE = new THREE.Color(0.85, 0.84, 0.80);
 const SOCK = new THREE.Color(0.78, 0.74, 0.66);

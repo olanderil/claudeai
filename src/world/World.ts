@@ -349,7 +349,7 @@ export class World {
     const preset = WORLD_PRESETS[this.worldIndex];
     this.aerodromes = buildAerodromeMeshes();
     scene.add(this.aerodromes);
-    this.settlements = buildSettlementMeshes(preset.style.dry, { flatRoofs: preset.flatRoofs });
+    this.settlements = buildSettlementMeshes(preset.style.dry, { flatRoofs: preset.flatRoofs, brick: preset.brick });
     scene.add(this.settlements);
     this.shipping = buildBoatMeshes();
     scene.add(this.shipping);
@@ -446,7 +446,7 @@ export class World {
 
     this.engine.scene.remove(this.settlements);
     disposeSettlementMeshes(this.settlements);
-    this.settlements = buildSettlementMeshes(tone, { flatRoofs: preset.flatRoofs });
+    this.settlements = buildSettlementMeshes(tone, { flatRoofs: preset.flatRoofs, brick: preset.brick });
     this.engine.scene.add(this.settlements);
 
     // The fleet is replanned by the same call that replans the villages, so it
@@ -509,7 +509,7 @@ export class World {
       snowLine: world.style.snowLine * season.snowScale,
       treeLine: world.style.treeLine,
       strata: world.style.strata,
-    }, { beach, timber, farm: world.farmland ?? 0.8 });
+    }, { beach, timber, farm: world.farmland ?? 0.8, stony: world.style.stony ?? 0 });
     this.vegetation.setSeason(this.seasonIndex);
     void worldWooded;
   }
@@ -700,6 +700,7 @@ export class World {
 
   applyQuality(preset: QualityPreset): void {
     this.quality = preset;
+    this.vegetation.setDensity(preset.trees ?? 1);
     this.terrain.setCastShadows(preset.terrainShadows);
     this.clouds.setBudget(preset.cloudPuffs);
     const wq = WEATHER_PRESETS[this.weatherIndex];

@@ -173,8 +173,9 @@ function show(s: Spec): string {
   sc.left = sc.bottom = -focus; sc.right = sc.top = focus; sc.near = 1; sc.far = 4000;
   sc.updateProjectionMatrix();
   for (const m of models) m.rig.animate(0.016, clock.time, s.aim ? new THREE.Vector3(...s.aim).normalize() : undefined);
-  const tris = renderer.info.render.triangles;
-  return `ok ${s.kind} tris(last)=${tris}`;
+  const m0 = models[0]?.rig;
+  const mz = m0?.muzzle ? ` muzzle=${m0.muzzle.toArray().map((v) => v.toFixed(2)).join(',')}` : '';
+  return `ok ${s.kind}${mz}`;
 }
 
 function stats(): Record<string, unknown> {
@@ -226,7 +227,10 @@ function atlas(which: 'map' | 'normalMap'): void {
   document.body.appendChild(c);
 }
 
-Object.assign(window as unknown as Record<string, unknown>, { show, stats, measure, atlas });
+/** Debug: the first model's rig (e.g. to read its muzzle after it has tracked an aim). */
+const rig = (): ModelRig | undefined => models[0]?.rig;
+
+Object.assign(window as unknown as Record<string, unknown>, { show, stats, measure, atlas, rig });
 const params = new URLSearchParams(location.search);
 const initial = params.get('spec');
 show(initial ? (JSON.parse(initial) as Spec) : { kind: 'grid', dist: 220, elev: 40 });

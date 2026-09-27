@@ -34,6 +34,9 @@ const BUCKET = 512;
 
 let segs: RoadSegment[] = [];
 let index = new Map<number, number[]>();
+/** The canals, as their own line set: painted as crisp water the same way roads are. */
+let waterSegs: RoadSegment[] = [];
+let waterIndex = new Map<number, number[]>();
 
 export function roadSegments(): RoadSegment[] {
   return segs;
@@ -50,6 +53,8 @@ export interface RoadNode { x: number; z: number; weight: number; }
 
 export interface RoadOptions {
   seed: number;
+  /** Ground a road must not cross — the aerodromes' landing grounds and hangar rows. */
+  blocked?: (x: number, z: number) => boolean;
   /** Finished-enough ground to test gradients and water against. */
   sample: (x: number, z: number) => number;
   /** Sea or lake: a road does not cross it. */
@@ -58,6 +63,8 @@ export interface RoadOptions {
   lined: number;
   /** Steepest average gradient a road will take. */
   maxGrade: number;
+  /** Fixed routes laid as they are: towpaths along the canals. */
+  extra?: { pts: [number, number][]; half: number; lined: boolean }[];
 }
 
 /**
@@ -97,8 +104,10 @@ export function planRoads(nodes: RoadNode[], opts: RoadOptions): void {
     if (!routeOk(a.x, a.z, b.x, b.z, opts)) continue;
     const lined = hash01(i, j, seed + 5) < opts.lined;
     addRoad([[a.x, a.z], ...bends(a.x, a.z, b.x, b.z, i * 131 + j, seed), [b.x, b.z]],
-      lined ? 3.4 : 2.8, lined, road++);
+      lined ? 2.9 : 2.4, lined, road++);
   }
+
+  for (const e of opts.extra ?? []) addRoad(e.pts, e.half, e.lined, road++);
 
   // Two long straight roads through the home sector, crossing the lines.
   for (let k = 0; k < 2; k++) {
@@ -114,14 +123,15 @@ export function planRoads(nodes: RoadNode[], opts: RoadOptions): void {
     // Split where the road meets the sea or climbs a wall; keep the rest.
     let run: [number, number][] = [];
     const flush = (): void => {
-      if (run.length >= 2) addRoad(run, 3.9, true, road++);
+      if (run.length >= 2) addRoad(run, 3.3, true, road++);
       run = [];
     };
     for (let p = 0; p < pts.length; p++) {
       const [x, z] = pts[p];
-      if (opts.wet(x, z) || (run.length > 0 && !routeOk(run[run.length - 1][0], run[run.length - 1][1], x, z, opts))) {
+      const bad = opts.wet(x, z) || (opts.blocked !== undefined && opts.blocked(x, z));
+      if (bad || (run.length > 0 && !routeOk(run[run.length - 1][0], run[run.length - 1][1], x, z, opts))) {
         flush();
-        if (!opts.wet(x, z)) run.push([x, z]);
+        if (!bad) run.push([x, z]);
         continue;
       }
       run.push([x, z]);
@@ -154,6 +164,7 @@ function routeOk(ax: number, az: number, bx: number, bz: number, opts: RoadOptio
     const x = ax + (bx - ax) * t;
     const z = az + (bz - az) * t;
     if (opts.wet(x, z)) return false;
+    if (opts.blocked && opts.blocked(x, z)) return false;
     const h = opts.sample(x, z);
     if (Math.abs(h - prev) / (len / steps) > opts.maxGrade) return false;
     prev = h;
@@ -161,25 +172,28 @@ function routeOk(ax: number, az: number, bx: number, bz: number, opts: RoadOptio
   return true;
 }
 
-function addRoad(pts: [number, number][], half: number, lined: boolean, road: number): void {
+function addRoad(
+  pts: [number, number][], half: number, lined: boolean, road: number,
+  into: RoadSegment[] = segs, idx: Map<number, number[]> = index,
+): void {
   for (let i = 0; i < pts.length - 1; i++) {
     const [ax, az] = pts[i];
     const [bx, bz] = pts[i + 1];
     const len = Math.hypot(bx - ax, bz - az);
     if (len < 1) continue;
-    const id = segs.length;
-    segs.push({ ax, az, bx, bz, dx: (bx - ax) / len, dz: (bz - az) / len, len, half, lined, road });
+    const id = into.length;
+    into.push({ ax, az, bx, bz, dx: (bx - ax) / len, dz: (bz - az) / len, len, half, lined, road });
     const r = ROAD_REACH + 10;
     for (let gx = Math.floor((Math.min(ax, bx) - r) / BUCKET); gx <= Math.floor((Math.max(ax, bx) + r) / BUCKET); gx++) {
       for (let gz = Math.floor((Math.min(az, bz) - r) / BUCKET); gz <= Math.floor((Math.max(az, bz) + r) / BUCKET); gz++) {
         // Only cells the segment actually passes near, not its whole bounding box.
         const cx = (gx + 0.5) * BUCKET;
         const cz = (gz + 0.5) * BUCKET;
-        if (segmentDistance(segs[id], cx, cz) > BUCKET * 0.75 + r) continue;
+        if (segmentDistance(into[id], cx, cz) > BUCKET * 0.75 + r) continue;
         const key = ((gx & 0xffff) << 16) | (gz & 0xffff);
-        const b = index.get(key);
+        const b = idx.get(key);
         if (b) b.push(id);
-        else index.set(key, [id]);
+        else idx.set(key, [id]);
       }
     }
   }
@@ -204,6 +218,22 @@ let lastValid = 0;
  * is the width of the road that won. Both are read off the back of this call.
  */
 export function roadSignedDistance(x: number, z: number): number {
+  return signedDistance(x, z, segs, index);
+}
+
+/** The same for the canals; `roadValidity()` and `roadHalfWidth()` then describe the canal. */
+export function waterSignedDistance(x: number, z: number): number {
+  return signedDistance(x, z, waterSegs, waterIndex);
+}
+
+/** Replace the canal line set (centrelines and half-widths). */
+export function setWaterways(lines: { pts: [number, number][]; half: number }[]): void {
+  waterSegs = [];
+  waterIndex = new Map();
+  lines.forEach((l, i) => addRoad(l.pts, l.half, false, i, waterSegs, waterIndex));
+}
+
+function signedDistance(x: number, z: number, segs: RoadSegment[], index: Map<number, number[]>): number {
   lastHalf = 3;
   lastValid = 0;
   if (segs.length === 0) return ROAD_REACH;

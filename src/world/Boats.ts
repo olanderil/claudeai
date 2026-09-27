@@ -18,6 +18,7 @@ import { SEA_LEVEL } from './Sea';
  * up with the density of neither.
  */
 
+/** 'cargo' is a period tramp steamer; 'sail' a fishing smack. */
 export type BoatKind = 'sail' | 'cargo';
 
 export interface Boat {
@@ -58,7 +59,7 @@ export interface BoatOptions {
  * It does put the freighters past the length of any ship afloat. That is the
  * trade: on this ocean, at these speeds, a realistic hull reads as nothing.
  */
-const EXAGGERATION = 2;
+const EXAGGERATION = 1.4;
 
 /** How far out boats are placed, metres. Beyond this the haze has them anyway. */
 const REACH = 62_000;
@@ -287,53 +288,60 @@ function sailcloth(
  * plane at exactly that height and a hull that floats has to agree with it.
  */
 function cargoGeometry(): THREE.BufferGeometry {
-  const hull = new THREE.Color(0.34, 0.11, 0.09); // oxide red, above the boot top
-  const deck = new THREE.Color(0.22, 0.24, 0.26);
-  const house = new THREE.Color(0.86, 0.86, 0.84);
-  const funnel = new THREE.Color(0.15, 0.15, 0.17);
-  const boxes = [
-    new THREE.Color(0.55, 0.16, 0.14),
-    new THREE.Color(0.16, 0.34, 0.50),
-    new THREE.Color(0.62, 0.52, 0.16),
-    new THREE.Color(0.20, 0.42, 0.26),
-  ];
-
+  // A tramp steamer of the war years: black hull, a buff midships house, one
+  // tall funnel with a band, and a mast fore and aft with derricks.
+  const hull = new THREE.Color(0.05, 0.05, 0.055);
+  const boot = new THREE.Color(0.30, 0.09, 0.07);
+  const deck = new THREE.Color(0.30, 0.26, 0.20);
+  const house = new THREE.Color(0.62, 0.55, 0.42);
+  const funnel = new THREE.Color(0.08, 0.08, 0.08);
+  const band = new THREE.Color(0.55, 0.12, 0.08);
+  const spar = new THREE.Color(0.28, 0.22, 0.16);
   const parts = [
-    // Hull. Sitting a little into the water so there is no gap at the waterline
-    // when the sea's normal map lifts a wave against it.
-    part(26, 15, 190, 0, 1.5, 0, hull),
-    // The bow, narrowed and carried forward — enough to break the slab.
-    part(14, 15, 26, 0, 1.5, -104, hull),
-    part(24, 1.6, 150, 0, 9.4, -8, deck),
-    // Containers, four rows of two, which is what makes it read as a container
-    // ship rather than as a barge from a mile up.
-    ...boxes.flatMap((c, i) => [
-      part(8.4, 7.6, 30, -5.6, 13.6, -60 + i * 34, c),
-      part(8.4, 7.6, 30, 5.6, 13.6, -60 + i * 34, boxes[(i + 2) % boxes.length]),
-    ]),
-    part(18, 13, 22, 0, 16, 72, house),
-    part(5, 9, 6, 0, 26, 80, funnel),
+    part(15, 2, 110, 0, -0.2, 0, boot),
+    part(15, 7, 110, 0, 3.6, 0, hull),
+    part(9, 7, 14, 0, 3.6, -61, hull),
+    part(14, 0.6, 106, 0, 7.4, 0, deck),
+    // Raised forecastle and poop.
+    part(14.4, 2.4, 16, 0, 8.6, -44, hull),
+    part(14.4, 2.4, 14, 0, 8.6, 46, hull),
+    // Midships house and bridge.
+    part(10, 4, 20, 0, 9.6, 2, house),
+    part(8, 2.6, 8, 0, 12.8, -4, house),
+    part(9, 0.4, 3, 0, 14.3, -6.5, spar),
+    // Funnel, raked slightly aft, with its company band.
+    part(3.4, 11, 3.8, 0, 16.5, 6, funnel),
+    part(3.5, 1.6, 3.9, 0, 19.5, 6, band),
+    // Masts and derricks.
+    part(0.5, 20, 0.5, 0, 17, -30, spar),
+    part(0.5, 18, 0.5, 0, 16, 32, spar),
+    part(0.35, 0.35, 14, 0, 12, -24, spar),
+    part(0.35, 0.35, 14, 0, 11, 26, spar),
   ];
   return mergeGeometries(parts, false);
 }
 
 function sailGeometry(): THREE.BufferGeometry {
-  const hull = new THREE.Color(0.92, 0.92, 0.90);
-  const stripe = new THREE.Color(0.12, 0.20, 0.34);
-  const canvas = new THREE.Color(0.97, 0.96, 0.93);
+  // A fishing smack: dark tarred hull, a gaff main and a jib in tan canvas
+  // barked brown, the way every working sail on these coasts was.
+  const hull = new THREE.Color(0.10, 0.08, 0.06);
+  const stripe = new THREE.Color(0.42, 0.38, 0.30);
+  const canvas = new THREE.Color(0.46, 0.25, 0.14);
+  const spar = new THREE.Color(0.25, 0.19, 0.12);
 
   const parts = [
-    part(3.4, 1.5, 11, 0, 0.25, 0, hull),
-    part(2.6, 1.4, 4.4, 0, 0.3, -4.4, hull),
-    part(3.5, 0.35, 11.2, 0, 1.0, 0, stripe),
-    // Mast and boom.
-    part(0.3, 13, 0.3, 0, 7.4, -0.6, hull),
-    part(0.25, 0.25, 6.4, 0, 1.6, 1.8, hull),
-    // The mainsail: luff up the mast, foot along the boom, head at the top.
-    sailcloth([[-0.5, 1.5], [4.6, 1.5], [-0.5, 12.6]], 0.2, canvas),
-    // And a jib forward of it. Between them these two triangles are most of
-    // what makes the silhouette read as a sailing boat rather than a stick.
-    sailcloth([[-1.0, 1.4], [-5.0, 1.0], [-1.0, 9.6]], 0.18, canvas),
+    part(4.2, 1.8, 14, 0, 0.3, 0, hull),
+    part(3.0, 1.6, 4.6, 0, 0.4, -6.2, hull),
+    part(4.3, 0.3, 14.2, 0, 1.25, 0, stripe),
+    part(0.35, 14, 0.35, 0, 8.2, -1.2, spar),
+    part(0.25, 0.25, 8.2, 0, 2.0, 2.6, spar),
+    part(0.2, 0.2, 6.5, 0, 11.4, 1.7, spar),
+    // Gaff mainsail: a quadrilateral as two triangles.
+    sailcloth([[-1.1, 1.9], [6.6, 1.9], [-1.1, 12.8]], 0.2, canvas),
+    sailcloth([[6.6, 1.9], [4.5, 11.2], [-1.1, 12.8]], 0.2, canvas),
+    // Jib forward to the bowsprit.
+    sailcloth([[-1.6, 1.8], [-8.4, 1.4], [-1.6, 10.6]], 0.18, canvas),
+    part(0.2, 0.2, 3.6, 0, 1.4, -8.4, spar),
   ];
   return mergeGeometries(parts, false);
 }

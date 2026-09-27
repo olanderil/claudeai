@@ -353,11 +353,13 @@ class Rig implements AirframeRig {
   private gunYaw: THREE.Group | null = null;
   private gunPitch: THREE.Group | null = null;
   private gunFlash: THREE.Group | null = null;
+  private readonly auxFlashes: THREE.Group[] = [];
   private wheels: THREE.Group | null = null;
   private wheelR = 0.35;
   private wheelAngle = 0;
   private wheelRate = 0;
-  private spin = 0;
+  // Parked props rest at an angle rather than bolt upright.
+  private spin = 0.7;
   private discSpin = 0;
   private head: THREE.Group | null = null;
   private readonly cockpitNodes: THREE.Object3D[] = [];
@@ -374,6 +376,8 @@ class Rig implements AirframeRig {
     this.skin = instanceSkin(base);
     this.dmg = this.skin.userData.dmg as DamageUniforms;
     this.bladeMat = propsMaterial().clone();
+    // clone() drops the shader hook; keep the program shared with the other hardware.
+    this.bladeMat.onBeforeCompile = propsMaterial().onBeforeCompile;
     this.eyePoint = t.meta.eye.clone();
     this.hitboxes = t.hitboxes.map((h) => ({ c: h.c.clone(), h: h.h.clone() }));
     this.muzzles = t.meta.muzzles.map((m) => m.clone());
@@ -441,6 +445,7 @@ class Rig implements AirframeRig {
       this.gunFlash = groups.get(t.meta.gunner.flash) ?? null;
       if (this.gunFlash) this.gunFlash.visible = false;
     }
+    for (const f of t.meta.auxFlashes ?? []) { const g = groups.get(f); if (g) { g.visible = false; this.auxFlashes.push(g); } }
     if (t.meta.scarf) {
       const holder = groups.get(t.meta.scarf.node);
       if (holder) {
@@ -509,7 +514,8 @@ class Rig implements AirframeRig {
       }
     }
     for (const m of this.discMats) {
-      m.opacity = blur;
+      // From the pilot's seat a spinning propeller is barely there.
+      m.opacity = blur * (this.cockpit ? 0.4 : 1);
       m.visible = blur > 0.01;
     }
 
@@ -534,10 +540,10 @@ class Rig implements AirframeRig {
 
     if (this.gunYaw) this.gunYaw.quaternion.setFromAxisAngle(_Y, s.gunnerYaw);
     if (this.gunPitch) this.gunPitch.quaternion.setFromAxisAngle(_X, -s.gunnerPitch);
-    if (this.gunFlash) {
+    for (const f of this.gunFlash ? [this.gunFlash, ...this.auxFlashes] : this.auxFlashes) {
       const on = s.gunnerFiring && Math.random() < 0.7;
-      this.gunFlash.visible = on;
-      if (on) this.gunFlash.scale.setScalar(0.55 + Math.random() * 0.5);
+      f.visible = on;
+      if (on) f.scale.setScalar(0.55 + Math.random() * 0.5);
     }
 
     if (near && !this.cockpit) {

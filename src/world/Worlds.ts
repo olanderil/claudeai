@@ -1,15 +1,15 @@
 import { fbm, ridged } from '../util/noise';
 import { clamp, lerp, smoothstep } from '../util/math';
 import { airstripHeight, airstrips, planSettlements, settlements } from './Settlements';
-import { carveRivers, carveTarns, planRivers, riverStrength, type RiverSettings } from './Rivers';
+import { addCanal, carveRivers, carveTarns, planRivers, riverStrength, type RiverSettings } from './Rivers';
 import { planBoats } from './Boats';
 import { planStructures } from './Structures';
 import {
-  addMinorAerodromes, aerodromeHeight, aerodromes, craterHeight, farAerodrome, homeAerodrome,
+  addMinorAerodromes, aerodromeClearing, aerodromeHeight, aerodromes, behindLines, craterHeight, frontDistance, farAerodrome, homeAerodrome,
   planAerodromes, planFrontSites, setFront, setWaterProbe, stripAllowed, type FrontSettings,
 } from './Front';
 import { forestCover, setForestStyle } from './Forest';
-import { nearestRoad, planRoads } from './Roads';
+import { nearestRoad, planRoads, roadValidity, setWaterways, waterSignedDistance } from './Roads';
 import { farmland, farmlandHome } from './Settlements';
 import { SEA_LEVEL } from './Sea';
 
@@ -35,6 +35,8 @@ export interface TerrainStyle {
   wooded?: number;
   /** Height below which the ground is beach sand, metres. Defaults by coast. */
   beach?: number;
+  /** Bare limestone breaking through thin soil, 0..1. */
+  stony?: number;
 }
 
 /** Which kinds of tree grow here, as relative shares of the scatter. */
@@ -71,10 +73,18 @@ export interface WorldPreset {
   villageSpacing?: number;
   /** Flat-roofed houses (the Levant), rather than pitched roofs. */
   flatRoofs?: boolean;
+  /** Share of red-brick buildings, 0..1 — Flanders and Artois were built of it. */
+  brick?: number;
   /** Share of roads lined with trees, 0..1. */
   roadTrees?: number;
   /** How much of the open country is laid out in fields, 0..1. */
   farmland?: number;
+  /** Share of field boundaries grown up as hedgerows and tree lines, 0..1. */
+  hedges?: number;
+  /** How many canals cross the country (needs `rivers`). */
+  canals?: number;
+  /** Whether the sector has a market town behind the home lines. */
+  town?: boolean;
   /** The front line through this world. */
   front?: FrontSettings;
   /** Tree kinds, for the 3D scatter. */
@@ -345,6 +355,10 @@ const TEMPERATE_TREES: TreePalette = { broadleaf: 1, conifer: 0.08, poplar: 1, p
 export const WORLD_PRESETS: WorldPreset[] = [
   {
     name: 'FLANDERS',
+    town: true,
+    canals: 2,
+    hedges: 0.55,
+    brick: 0.8,
     farmland: 1.0,
     blurb: 'Flat, drowned polder around a ruined cloth-hall town. The mud never dries.',
     fieldElevation: 14,
@@ -364,6 +378,9 @@ export const WORLD_PRESETS: WorldPreset[] = [
   },
   {
     name: 'SOMME',
+    canals: 1,
+    hedges: 0.2,
+    brick: 0.45,
     farmland: 0.95,
     blurb: 'Rolling chalk downland. Every trench is a white scar; every wood a stand of stumps.',
     fieldElevation: 110,
@@ -382,6 +399,9 @@ export const WORLD_PRESETS: WorldPreset[] = [
   },
   {
     name: 'VERDUN',
+    town: true,
+    hedges: 0.3,
+    brick: 0.15,
     farmland: 0.55,
     blurb: 'Steep wooded heights above the Meuse, ringed with forts. Near the line, not a tree stands.',
     fieldElevation: 300,
@@ -401,6 +421,7 @@ export const WORLD_PRESETS: WorldPreset[] = [
   },
   {
     name: 'ISONZO',
+    hedges: 0.12,
     farmland: 0.3,
     blurb: 'The Carso: a stone plateau pocked with sinkholes, the Adriatic at your back.',
     fieldElevation: 40,
@@ -410,8 +431,8 @@ export const WORLD_PRESETS: WorldPreset[] = [
     front: { offset: 4000, amplitude: 800, wavelength: 11000, width: 300, craters: 0.85, chalk: 0.75, flooded: 0 },
     trees: { broadleaf: 0.6, conifer: 0.6, poplar: 0.4, palm: 0, shrub: 1 },
     style: {
-      grass: [0.19, 0.225, 0.10], dry: [0.40, 0.31, 0.20], rock: [0.54, 0.53, 0.49],
-      snowLine: 1700, treeLine: 1300, strata: 0, wooded: 0.3,
+      grass: [0.16, 0.17, 0.085], dry: [0.36, 0.27, 0.17], rock: [0.50, 0.49, 0.45],
+      snowLine: 1700, treeLine: 1300, strata: 0, wooded: 0.3, stony: 0.6,
       water: { deep: 0x08304a, shallow: 0x2a7f86, sand: 0x8c8f7c },
     },
     rivers: { depth: 14, count: 5, sourceMin: 300, sourceMax: 1200, endAt: 0,
@@ -420,6 +441,7 @@ export const WORLD_PRESETS: WorldPreset[] = [
   },
   {
     name: 'DOLOMITES',
+    hedges: 0.15,
     farmland: 0.35,
     blurb: 'War in the high Alps: trenches cut in snow and rock between pale dolomite towers.',
     fieldElevation: 1210,
@@ -429,8 +451,8 @@ export const WORLD_PRESETS: WorldPreset[] = [
     front: { offset: 4200, amplitude: 1000, wavelength: 14000, width: 360, craters: 0.6, chalk: 0.5, flooded: 0 },
     trees: { broadleaf: 0.25, conifer: 1, poplar: 0.15, palm: 0, shrub: 0.1 },
     style: {
-      grass: [0.15, 0.27, 0.11], dry: [0.40, 0.38, 0.30], rock: [0.50, 0.475, 0.44],
-      snowLine: 2150, treeLine: 1850, strata: 0, wooded: 1,
+      grass: [0.14, 0.23, 0.10], dry: [0.38, 0.35, 0.27], rock: [0.52, 0.49, 0.45],
+      snowLine: 2550, treeLine: 1850, strata: 0, wooded: 1, stony: 0.15,
     },
     rivers: { depth: 30, count: 20, sourceMin: 1900, sourceMax: 3400, endAt: 1180,
               widthNear: 18, widthFar: 70 },
@@ -438,6 +460,7 @@ export const WORLD_PRESETS: WorldPreset[] = [
   },
   {
     name: 'GALLIPOLI',
+    hedges: 0.06,
     farmland: 0.25,
     blurb: 'Scrub ridges and sheer gullies above the Aegean. The heights are theirs.',
     fieldElevation: 30,
@@ -449,14 +472,15 @@ export const WORLD_PRESETS: WorldPreset[] = [
     trees: { broadleaf: 0.2, conifer: 0.5, poplar: 0.2, palm: 0, shrub: 1 },
     landmarkDensity: { castle: 0.8, monastery: 0.3 },
     style: {
-      grass: [0.27, 0.27, 0.13], dry: [0.50, 0.41, 0.26], rock: [0.48, 0.42, 0.33],
-      snowLine: 2500, treeLine: 700, strata: 0, wooded: 0.15,
+      grass: [0.20, 0.19, 0.095], dry: [0.44, 0.35, 0.22], rock: [0.46, 0.41, 0.33],
+      snowLine: 2500, treeLine: 700, strata: 0, wooded: 0.15, stony: 0.35,
       water: { deep: 0x06284a, shallow: 0x1f7f95, sand: 0x9a9480 },
     },
     height: gallipoliHeight,
   },
   {
     name: 'SINAI',
+    hedges: 0.0,
     farmland: 0.0,
     blurb: 'Sand, scrub and wells: the Gaza line across the dunes, the sea at the western edge.',
     fieldElevation: 60,
@@ -468,7 +492,7 @@ export const WORLD_PRESETS: WorldPreset[] = [
     trees: { broadleaf: 0, conifer: 0, poplar: 0, palm: 1, shrub: 0.6 },
     landmarkDensity: { castle: 0.3, monastery: 0.5 },
     style: {
-      grass: [0.78, 0.60, 0.36], dry: [0.64, 0.48, 0.30], rock: [0.50, 0.37, 0.25],
+      grass: [0.60, 0.43, 0.24], dry: [0.52, 0.37, 0.22], rock: [0.44, 0.31, 0.20],
       snowLine: 5000, treeLine: 900, strata: 0, wooded: 0,
       water: { deep: 0x05304a, shallow: 0x1d8f9a, sand: 0xb8a784 },
     },
@@ -541,14 +565,22 @@ export { riverStrength } from './Rivers';
 function wetAt(x: number, z: number): boolean {
   const h = terrainHeight(x, z);
   if (active.hasOcean && h < SEA_LEVEL + 0.4) return true;
-  return riverStrength() > 0.35;
+  if (riverStrength() > 0.35) return true;
+  return onCanal(x, z);
+}
+
+/** Within a canal's water. */
+function onCanal(x: number, z: number): boolean {
+  const d = waterSignedDistance(x, z);
+  return roadValidity() > 0.5 && Math.abs(d) < 12;
 }
 
 /** The same, against ground with no pads or craters cut in yet. */
 function wetNatural(x: number, z: number): boolean {
   const h = carveTarns(x, z, carveRivers(x, z, naturalHeight(x, z)));
   if (active.hasOcean && h < SEA_LEVEL + 0.4) return true;
-  return riverStrength() > 0.3;
+  if (riverStrength() > 0.3) return true;
+  return onCanal(x, z);
 }
 
 /** Woodedness the world asks for, or the one its grass colour implies. */
@@ -581,13 +613,67 @@ export function forestAt(x: number, z: number): number {
  * the distance already.
  */
 export function clearingAt(x: number, z: number, settled: number, river: number): number {
-  let c = Math.max(settled * 0.95, smoothstep(0.02, 0.3, river));
-  for (const a of aerodromes()) {
-    const r = Math.hypot(x - a.x, z - a.z);
-    const reach = a.halfLength + (a.main ? 420 : 160);
-    if (r < reach + 200) c = Math.max(c, 1 - smoothstep(reach, reach + 200, r));
+  return Math.max(settled * 0.95, smoothstep(0.02, 0.3, river), aerodromeClearing(x, z));
+}
+
+/**
+ * Cut the world's canals and return their towpaths.
+ *
+ * The first runs roughly north–south straight through the lines, a few
+ * kilometres to one side of the home field, the way the Yser canal ran through
+ * the salient; the second, if there is one, crosses the country east–west
+ * behind the home lines. Both are ruled straight with a few gentle kinks.
+ */
+function planCanals(): { pts: [number, number][]; half: number; lined: boolean }[] {
+  const out: { pts: [number, number][]; half: number; lined: boolean }[] = [];
+  const water: { pts: [number, number][]; half: number }[] = [];
+  const count = active.rivers ? active.canals ?? 0 : 0;
+  for (let c = 0; c < count; c++) {
+    const r = (k: number): number => cellRandom(c, currentSeed, 511 + k);
+    const pts: [number, number][] = [];
+    if (c === 0) {
+      const x0 = (r(1) < 0.5 ? -1 : 1) * (2600 + r(2) * 2200);
+      for (let z = 16000; z >= -20000; z -= 4000) pts.push([x0 + (r(3 + z / 1000) - 0.5) * 900 + z * (r(4) - 0.5) * 0.12, z]);
+    } else {
+      const z0 = 5200 + r(5) * 3500;
+      for (let x = -20000; x <= 20000; x += 4000) pts.push([x, z0 + (r(6 + x / 1000) - 0.5) * 800]);
+    }
+    // Keep the canal off the home field and out of the sea.
+    const ok = pts.every(([x, z]) => Math.hypot(x, z) > 1800);
+    if (!ok) continue;
+    addCanal(pts, 13, naturalHeight);
+    water.push({ pts, half: 11 });
+    // The towpath, on one bank.
+    const side = r(7) < 0.5 ? -1 : 1;
+    const path: [number, number][] = [];
+    for (let i = 0; i < pts.length; i++) {
+      const [x, z] = pts[i];
+      const [nx, nz] = pts[Math.min(pts.length - 1, i + 1)];
+      const [px, pz] = pts[Math.max(0, i - 1)];
+      const dx = nx - px;
+      const dz = nz - pz;
+      const len = Math.hypot(dx, dz) || 1;
+      path.push([x - (dz / len) * 24 * side, z + (dx / len) * 24 * side]);
+    }
+    out.push({ pts: path, half: 2.2, lined: true });
   }
-  return c;
+  setWaterways(water);
+  return out;
+}
+
+/** Whether a point is on an aerodrome's landing ground or among its buildings. */
+function onAerodrome(x: number, z: number): boolean {
+  for (const a of aerodromes()) {
+    const hr = (a.headingDeg * Math.PI) / 180;
+    const dx = x - a.x;
+    const dz = z - a.z;
+    const along = dx * Math.sin(hr) - dz * Math.cos(hr);
+    const right = dx * Math.cos(hr) + dz * Math.sin(hr);
+    // The main fields keep their camp clear as well; a minor field only its strip.
+    const camp = a.main ? 230 : 45;
+    if (Math.abs(along) < a.halfLength + 40 && right > -(a.halfWidth + camp) && right < a.halfWidth + 35) return true;
+  }
+  return false;
 }
 
 /**
@@ -608,6 +694,8 @@ function replanAll(): void {
   // that does not exist until it has been routed.
   planRivers(naturalHeight, active.rivers ?? null, currentSeed);
 
+  const towpaths = planCanals();
+
   planAerodromes({ natural: naturalHeight, fieldElevation: field, wet: wetNatural, seed: currentSeed });
   const far = farAerodrome();
 
@@ -619,6 +707,13 @@ function replanAll(): void {
     exclusion: FIELD_FALLOFF + 900,
     spacing: active.villageSpacing ?? 5200,
     siteAllowed: (x, z) => Math.hypot(x - far.x, z - far.z) > 1500 && !wetNatural(x, z),
+    // The sector's market town: in the salient, a kilometre or so behind the
+    // home lines, near the middle of the map — the ruined Ypres of this front.
+    town: active.town ? (x, z) => {
+      const u = behindLines(x, z);
+      if (frontDistance(x, z) < 0 || u < 500 || u > 2400 || Math.abs(x) > 7000) return Infinity;
+      return Math.abs(u - 1300) + Math.abs(x) * 0.3;
+    } : undefined,
     stripAllowed: (x, z) => stripAllowed(x, z) && !wetNatural(x, z),
   });
   addMinorAerodromes(airstrips());
@@ -626,16 +721,18 @@ function replanAll(): void {
   planRoads([
     ...settlements().map((v) => ({ x: v.x, z: v.z, weight: v.fields ? 1 : 1.5 })),
     ...aerodromes().filter((a) => a.main).map((a) => {
-      // To the hangar side, not across the landing ground.
+      // Behind the camp on the hangar side, not across the landing ground.
       const hr = (a.headingDeg * Math.PI) / 180;
-      return { x: a.x - Math.cos(hr) * (a.halfWidth + 160), z: a.z - Math.sin(hr) * (a.halfWidth + 160), weight: 2 };
+      return { x: a.x - Math.cos(hr) * (a.halfWidth + 290), z: a.z - Math.sin(hr) * (a.halfWidth + 290), weight: 2 };
     }),
   ], {
     seed: currentSeed,
+    blocked: onAerodrome,
     sample: terrainHeight,
     wet: (x, z) => active.hasOcean && terrainHeight(x, z) < SEA_LEVEL + 0.6,
     lined: active.roadTrees ?? 0.4,
     maxGrade: 0.14,
+    extra: towpaths,
   });
 
   // Landmarks against the finished ground.

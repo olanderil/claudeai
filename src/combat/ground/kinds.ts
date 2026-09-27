@@ -118,7 +118,7 @@ function hangarTruss(z: number): [Vec3, Vec3, number][] {
 
 function hangar(side: Side, q: number): KindBuild {
   const s = new Parts(11), c = new Parts(12);
-  const canvasCol = side === 'allied' ? 0xab9a74 : 0x979379;
+  const canvasCol = side === 'allied' ? 0x958562 : 0x736f58;
   const timber = side === 'allied' ? 0x8a7152 : 0x7a6a52;
   const prof = hangarProfile(!q);
   const lens = [0];
@@ -414,11 +414,11 @@ function artillery(side: Side, q: number): KindBuild {
   sandRing(s, V(0, 0, 0.2), 3.4, 0.95, 0.8, 0.95, Math.PI * 2 - 0.95, sb, q ? 12 : 28);
   const berm = gridGeometry(q ? 12 : 28, 5, (i, j) => {
     const a = 0.8 + ((Math.PI * 2 - 1.6) * i) / (q ? 12 : 28);
-    const pr = [[0, 0.95], [0.4, 1.0], [1.0, 0.9], [1.7, 0.5], [2.4, 0.15], [2.9, 0]][j];
-    const rr = 4.2 + pr[0] + (vnoise3(a * 5, j, 1) - 0.5) * 0.3;
+    const pr = [[0, 0.9], [0.3, 0.95], [0.7, 0.8], [1.2, 0.42], [1.6, 0.12], [1.9, 0]][j];
+    const rr = 4.15 + pr[0] + (vnoise3(a * 5, j, 1) - 0.5) * 0.3;
     return V(Math.sin(a) * rr, pr[1] * (0.8 + vnoise3(a * 7, 2, j) * 0.4), 0.2 + Math.cos(a) * rr);
   }, (i, j) => [i * 0.5, j * 0.4], true);
-  s.add(berm, null, { color: COL.earth, tile: TILE.TURF, uv: 'keep', rough: 1, jitter: 0 });
+  s.add(berm, null, { color: COL.turf, tile: TILE.TURF, uv: 'keep', rough: 1, jitter: 0 });
   s.add(new THREE.CircleGeometry(3.45, q ? 10 : 24), M(0, 0.03, 0.2, -Math.PI / 2), { color: COL.earthDark, tile: TILE.EARTH, scale: 3, rough: 1 });
   // Carriage: wheels, axle, shield, box trail and spade.
   for (const sx of [-1, 1]) wheel(s, M(sx * 0.82, 0.7, 0), 0.7, 0.1, body, q);
@@ -445,13 +445,15 @@ function artillery(side: Side, q: number): KindBuild {
   s.rod(V(0, how ? -0.2 : 0.18, 0.4).applyMatrix4(bm), V(0, how ? -0.2 : 0.18, -1.3).applyMatrix4(bm), 0.09, paint, q ? 6 : 10);
   const muzzle = V(0, 0, -len - 0.05).applyMatrix4(bm);
   // Camouflage net on poles.
-  const nn = q ? 6 : 14;
+  // The net is pegged out to the top of the parapet and propped on poles.
+  const nn = q ? 6 : 16;
   const net = gridGeometry(nn, nn, (i, j) => {
-    const x = -5.4 + (10.8 * j) / nn, z = -5.2 + (10.4 * i) / nn;
+    const x = -4.6 + (9.2 * j) / nn, z = -4.4 + (9.2 * i) / nn;
     const d2 = x * x + (z - 0.2) * (z - 0.2);
-    const y = Math.max(0.12, 2.95 - 0.1 * d2) + (vnoise3(x, z, 3) - 0.5) * 0.35;
-    return V(x + (vnoise3(z, x, 9) - 0.5) * 0.5, y, z);
-  }, (i, j) => [j * 0.55, i * 0.55]);
+    const y = Math.max(0.95, 2.85 - 0.1 * d2) + (vnoise3(x, z, 3) - 0.5) * 0.3;
+    return V(x + (vnoise3(z, x, 9) - 0.5) * 0.4, y, z);
+  }, (i, j) => [j * 0.5, i * 0.5]);
+  ragged(net, (x, _y, z) => Math.hypot(x, z - 0.2) < 4.75 + vnoise3(x, 2, z) * 0.6);
   c.add(net, null, { color: 0xffffff, tile: TILE.NET, uv: 'keep', rough: 1, jitter: 0.05, ember: 1 });
   for (const [px, pz] of [[-2.6, -2.2], [2.6, -2.2], [-2.6, 2.6], [2.6, 2.6]]) {
     const hgt = 2.95 - 0.1 * (px * px + (pz - 0.2) * (pz - 0.2));
@@ -532,11 +534,11 @@ function mgnest(side: Side, q: number): KindBuild {
     for (const [px, pz, h] of [[-1.35, -0.35, 1.75], [1.35, -0.35, 1.75], [-1.35, 1.7, 1.5], [1.35, 1.7, 1.5]]) {
       s.beam(V(px, 0, pz), V(px, h, pz), 0.12, WOOD(COL.timber));
     }
-    s.box(3.3, 0.04, 2.6, M(0, 1.66, 0.68, 0.11), { color: 0x7d7b74, tile: TILE.CORRUGATED, scale: 1.3, rough: 0.6, metal: 0.45 });
+    s.box(3.3, 0.04, 2.6, M(0, 1.66, 0.68, 0.11), { color: 0x7a746a, tile: TILE.CORRUGATED, scale: 1.3, rough: 0.55, metal: 0.25 });
     if (!q) {
       for (let k = 0; k < 9; k++) {
         const x = -1.2 + (k % 3) * 1.2 + (s.rnd() - 0.5) * 0.3, z = 0.0 + Math.floor(k / 3) * 0.75;
-        s.box(0.62, 0.2, 0.36, M(x, 1.72 + 0.1 - z * 0.1 + 0.07, z, 0.11, (s.rnd() - 0.5) * 0.6), { ...sb, uv: 'box' });
+        s.box(0.62, 0.2, 0.36, M(x, 1.845 - z * 0.11, z, 0.11, (s.rnd() - 0.5) * 0.6), { ...sb, uv: 'box' });
       }
     }
     // Tripod on the parapet.
@@ -562,7 +564,7 @@ function mgnest(side: Side, q: number): KindBuild {
   // German concrete pillbox (MEBU) with a firing slit.
   const tur = dyn('turret', null, V(0, 1.05, -1.4), 'yaw', 0, 65);
   const gun = dyn('gun', 'turret', V(0, 0.02, 0), 'pitch', 0.02, 66);
-  const con: PartOpts = { color: COL.concrete, tile: TILE.CONCRETE, scale: 1.4, rough: 0.95, jitter: 0.02, ember: 0.2 };
+  const con: PartOpts = { color: 0x8c887d, tile: TILE.CONCRETE, scale: 1.4, rough: 0.95, jitter: 0.02, ember: 0.2 };
   const W = 4.2, D = 3.4;
   s.box(W, 0.95, 0.55, M(0, 0.475, -D / 2), con);
   s.box(W, 0.35, 0.55, M(0, 1.38, -D / 2), con);
@@ -572,18 +574,18 @@ function mgnest(side: Side, q: number): KindBuild {
   s.box(0.9, 1.55, 0.55, M(1.65, 0.775, D / 2), con);
   s.box(W + 0.3, 0.42, D + 0.35, M(0, 1.76, 0), con);
   s.box(W - 1.0, 1.4, D - 1.0, M(0, 0.72, 0), { color: 0x0c0c0b, tile: TILE.PAINT, rough: 1 });
-  s.box(W - 0.2, 0.04, D, M(0, 2.0, 0.1, 0.03), { color: 0x6f6b62, tile: TILE.CORRUGATED, scale: 1.3, rough: 0.6, metal: 0.4 });
+  s.box(W - 0.2, 0.04, D, M(0, 2.0, 0.1, 0.03), { color: 0x736e64, tile: TILE.CORRUGATED, scale: 1.3, rough: 0.55, metal: 0.25 });
   // Earth heaped against the sides and back.
   const mound = gridGeometry(q ? 8 : 20, 4, (i, j) => {
-    const a = -1.35 + (2.7 * 2 * i) / (q ? 8 : 20) / 2 + Math.PI / 2;
-    const ang = -Math.PI * 0.35 + (Math.PI * 1.7 * i) / (q ? 8 : 20);
-    void a;
-    const pr = [[0, 1.5], [0.4, 1.35], [1.0, 0.9], [1.6, 0.35], [2.1, 0]][j];
+    // From the front-left corner round the back to the front-right: the
+    // firing face stays clear.
+    const ang = -(Math.PI - 0.75) + (2 * (Math.PI - 0.75) * i) / (q ? 8 : 20);
+    const pr = [[0, 1.05], [0.35, 0.95], [0.9, 0.65], [1.5, 0.25], [1.9, 0]][j];
     const ex = Math.sin(ang), ez = Math.cos(ang);
     const rx = W / 2 + pr[0], rz = D / 2 + pr[0];
     return V(ex * rx * 1.02, pr[1] * (0.85 + vnoise3(i, j, 2) * 0.3), ez * rz * 1.02 + 0.2);
   }, (i, j) => [i * 0.6, j * 0.5], true);
-  s.add(mound, null, { color: COL.earth, tile: TILE.TURF, uv: 'keep', rough: 1, jitter: 0 });
+  s.add(mound, null, { color: COL.turf, tile: TILE.TURF, uv: 'keep', rough: 1, jitter: 0 });
   if (!q) {
     for (let k = 0; k < 8; k++) {
       s.box(0.62, 0.2, 0.36, M(-1.5 + (k % 4) * 1.0, 2.12 + Math.floor(k / 4) * 0.2, -0.6 + Math.floor(k / 4) * 0.9, 0, (s.rnd() - 0.5) * 0.5), { ...sb, uv: 'box' });
@@ -811,7 +813,7 @@ function farmhouse(p: Parts, q: number, ruined: boolean, r: () => number): void 
   for (const sx of [-1, 1]) p.add(gg, M(sx * (L / 2 - (sx > 0 ? T : 0)), H, 0, 0, Math.PI / 2), { ...plaster, uv: 'box' });
   const slope = Math.hypot(D / 2 + 0.5, ridge - H + 0.35);
   for (const sz of [-1, 1]) {
-    p.box(L + 0.8, 0.12, slope, M(0, (H + ridge) / 2 - 0.05, sz * (D / 4 + 0.22), -pitch, sz > 0 ? Math.PI : 0), { color: 0xffffff, tile: TILE.ROOFTILE, scale: 2.0, rough: 0.85, jitter: 0.05, ember: 0.5 });
+    p.box(L + 0.8, 0.12, slope, M(0, (H + ridge) / 2 - 0.05, sz * (D / 4 + 0.22), -pitch, sz > 0 ? Math.PI : 0), { color: 0xcfc0b2, tile: TILE.ROOFTILE, scale: 2.0, rough: 0.85, jitter: 0.05, ember: 0.5 });
   }
   p.box(L + 0.8, 0.16, 0.3, M(0, ridge + 0.1, 0), { color: 0x8c4a32, tile: TILE.PAINT, rough: 0.8 });
   // Chimney.
@@ -835,7 +837,7 @@ function hq(side: Side, q: number): KindBuild {
   farmhouse(s, q, false, s.rnd);
   // Lean-to shed on the east gable.
   s.box(0.08, 2.2, 4.0, M(7.3, 1.1, 0.4), WOOD(COL.creosote));
-  s.box(2.3, 0.05, 4.4, M(6.2, 2.45, 0.4, 0, 0, -0.18), { color: 0x7b766d, tile: TILE.CORRUGATED, scale: 1.3, rough: 0.6, metal: 0.4 });
+  s.box(2.3, 0.05, 4.4, M(6.2, 2.45, 0.4, 0, 0, -0.18), { color: 0x78736a, tile: TILE.CORRUGATED, scale: 1.3, rough: 0.55, metal: 0.25 });
   for (const z of [-1.6, 2.4]) s.box(2.3, 2.2, 0.08, M(6.15, 1.1, z), WOOD(COL.creosote));
   // Sandbagged doorway.
   sandWall(s, V(-1.6, 0, -3.8), V(-1.6, 0, -5.3), 1.5, 0.7, sb);
@@ -911,7 +913,7 @@ function hut(side: Side, q: number): KindBuild {
       const a = (j / na) * Math.PI;
       return V(Math.cos(a) * R, 0.15 + Math.sin(a) * R, -L / 2 + (L * i) / nz);
     }, (i, j) => [(-L / 2 + (L * i) / nz) / 1.0, -((j / na) * Math.PI * R) / 1.0], true);
-    s.add(shellG, null, { color: 0x6f6e66, tile: TILE.CORRUGATED, uv: 'keep', rough: 0.55, metal: 0.45, jitter: 0, ember: 0.3 });
+    s.add(shellG, null, { color: 0x6e6b63, tile: TILE.CORRUGATED, uv: 'keep', rough: 0.5, metal: 0.3, jitter: 0, ember: 0.3 });
     const inner = gridGeometry(1, na, (i, j) => {
       const a = (j / na) * Math.PI;
       return V(Math.cos(a) * (R - 0.05), 0.15 + Math.sin(a) * (R - 0.05), -L / 2 + L * i);
@@ -1013,9 +1015,17 @@ function tent(side: Side, q: number): KindBuild {
     }, (i, j) => [(j / (n * sub)) * Math.PI * 2 * R / 2, -((H - wallH) * i) / rings / 1.5]);
     s.add(cone, null, { color: col, tile: TILE.CANVAS, uv: 'keep', rough: 0.92, ember: 1, jitter: 0 });
     s.add(new THREE.CylinderGeometry(R, R + 0.05, wallH, n * sub, 1, true), M(0, wallH / 2, 0), { color: col, tile: TILE.CANVAS, scale: 1.5, rough: 0.92, ember: 1 });
-    // Open door: dark gap with the flap tied back.
-    s.add(new THREE.PlaneGeometry(0.9, 1.6), M(0, 0.85, -R + 0.25, 0.28, Math.PI), { color: 0x14110d, tile: TILE.PAINT, rough: 1 });
-    s.box(0.35, 1.5, 0.08, M(0.62, 0.8, -R + 0.18, 0.25, 0.3), { color: col, tile: TILE.CANVAS, scale: 1, rough: 0.92, ember: 1 });
+    // Open door: a dark slit laid on the cone, with the flap folded back.
+    const slope = Math.atan2(R, H - wallH);
+    const tri = new THREE.BufferGeometry().setFromPoints([V(-0.5, 0, 0), V(0.5, 0, 0), V(0, 1.75, 0)]);
+    tri.setIndex([0, 2, 1]);
+    tri.computeVertexNormals();
+    s.add(tri, M(0, wallH, -R - 0.03, slope, 0, 0), { color: 0x0e0c09, tile: TILE.PAINT, rough: 1 });
+    s.add(new THREE.PlaneGeometry(0.9, 0.42), M(0, wallH / 2 - 0.02, -R - 0.04, 0, Math.PI), { color: 0x0e0c09, tile: TILE.PAINT, rough: 1 });
+    const flap = new THREE.BufferGeometry().setFromPoints([V(0, 0, 0), V(0.55, 0.1, 0.08), V(0.05, 1.65, 0)]);
+    flap.setIndex([0, 2, 1, 0, 1, 2]);
+    flap.computeVertexNormals();
+    s.add(flap, M(0.5, wallH, -R - 0.05, slope, 0.35, 0), { color: col, tile: TILE.CANVAS, scale: 1, rough: 0.92, ember: 1 });
     s.sphere(0.07, M(0, H + 0.1, 0), WOOD(COL.timberDark), 6, 4);
     if (!q) {
       for (let k = 0; k < n; k++) {

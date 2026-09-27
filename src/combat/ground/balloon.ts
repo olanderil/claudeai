@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { M, Parts, V, rng, type HitSphere, type Vec3 } from './util';
-import { NOISE_GLSL, TILE, crossPath, uberMaterial } from './atlas';
+import { ENV_OCCLUSION, NOISE_GLSL, TILE, crossPath, uberMaterial } from './atlas';
 import { soldier, type Side } from './figures';
 import { ROPE, COL, PAINT } from './blocks';
 import type { ModelRig } from '../GroundModels';
@@ -57,8 +57,8 @@ const CAQUOT: BalloonShape = {
   z0: -13,
   gores: 16,
   pitch: 0.03,
-  fabric: '#b9a57c',
-  seam: 'rgba(70,58,38,0.55)',
+  fabric: '#a8936a',
+  seam: 'rgba(70,58,38,0.32)',
 };
 
 const DRACHEN_R = 3.8;
@@ -73,8 +73,8 @@ const DRACHEN: BalloonShape = {
   z0: -12,
   gores: 12,
   pitch: 0.5,
-  fabric: '#b0aa8c',
-  seam: 'rgba(60,58,44,0.5)',
+  fabric: '#a2976c',
+  seam: 'rgba(60,58,44,0.3)',
 };
 
 /* ---------------------------------------------------------------- texture */
@@ -131,7 +131,8 @@ function paintEnvelope(side: Side, shape: BalloonShape): { map: THREE.CanvasText
     a.beginPath(); a.moveTo(0, y); a.lineTo(TEX_W, y); a.stroke();
     h.beginPath(); h.moveTo(0, y); h.lineTo(TEX_W, y); h.stroke();
   }
-  a.lineWidth = 1.5; h.lineWidth = 2;
+  a.lineWidth = 1; h.lineWidth = 2;
+  a.strokeStyle = shape.seam.replace(/[\d.]+\)$/, '0.18)');
   for (let x = 0; x < TEX_W; x += stripW) {
     a.beginPath(); a.moveTo(x, 0); a.lineTo(x, TEX_H); a.stroke();
     h.beginPath(); h.moveTo(x, 0); h.lineTo(x, TEX_H); h.stroke();
@@ -146,11 +147,11 @@ function paintEnvelope(side: Side, shape: BalloonShape): { map: THREE.CanvasText
   for (const th of [180 - 58, 180 + 58]) {
     const y = (th / 360) * TEX_H;
     const x0 = (shape === CAQUOT ? 3.5 : 2.5) * pxPerM, x1 = (shape === CAQUOT ? 19 : 15) * pxPerM;
-    a.fillStyle = 'rgba(75,62,42,0.8)'; a.fillRect(x0, y - 5, x1 - x0, 10);
-    h.fillStyle = '#d0d0d0'; h.fillRect(x0, y - 5, x1 - x0, 10);
+    a.fillStyle = 'rgba(75,62,42,0.45)'; a.fillRect(x0, y - 4, x1 - x0, 8);
+    h.fillStyle = '#c8c8c8'; h.fillRect(x0, y - 4, x1 - x0, 8);
     for (let x = x0; x < x1; x += pxPerM * 0.7) {
-      a.fillStyle = 'rgba(40,32,22,0.9)'; a.fillRect(x - 3, y - 12, 6, 24);
-      h.fillStyle = '#ffffff'; h.fillRect(x - 3, y - 12, 6, 24);
+      a.fillStyle = 'rgba(50,40,28,0.55)'; a.fillRect(x - 2, y - 7, 4, 14);
+      h.fillStyle = '#ffffff'; h.fillRect(x - 2, y - 7, 4, 14);
       // Load-spreading patch fans up from each toggle.
       a.strokeStyle = 'rgba(70,58,40,0.35)'; a.lineWidth = 1.5;
       for (const d of [-1, 0, 1]) {
@@ -323,15 +324,16 @@ function caquotFins(seg: number): THREE.BufferGeometry[] {
 function drachenBag(seg: number): THREE.BufferGeometry[] {
   // Rudder bag: a fat tube curling under and round the tail end.
   const L = 24, zTail = DRACHEN.z0 + L;
-  const cy = 0.4, cz = zTail - 3.2, Rt = 4.6;
-  const b0 = -0.9, b1 = 2.35;
+  const cy = 0.2, cz = zTail - 3.9, Rt = 4.1;
+  const b0 = -0.6, b1 = 1.45;
   const nb = seg * 2, nr = seg;
   const pos: number[] = [], uv: number[] = [], idx: number[] = [];
   for (let i = 0; i <= nb; i++) {
     const t = i / nb, b = b0 + (b1 - b0) * t;
     const cyl = V(0, cy - Rt * Math.cos(b), cz + Rt * Math.sin(b));
     const radial = V(0, -Math.cos(b), Math.sin(b));
-    const tube = 1.55 * Math.pow(Math.sin(Math.PI * (0.08 + 0.84 * t)), 0.6);
+    // Fattest low down, like a wind-filled sack; tapering where it joins.
+    const tube = 1.95 * Math.pow(Math.sin(Math.PI * (0.06 + 0.88 * t)), 0.55) * (1 - 0.25 * t);
     for (let j = 0; j <= nr; j++) {
       const a = (j / nr) * Math.PI * 2;
       const p = cyl.clone().addScaledVector(radial, Math.cos(a) * tube).add(V(Math.sin(a) * tube * 0.85, 0, 0));
@@ -350,8 +352,9 @@ function drachenBag(seg: number): THREE.BufferGeometry[] {
   g.setIndex(idx);
   g.computeVertexNormals();
   // Two small stabilising "ears" on the upper flanks.
-  const ears = [Math.PI / 2 - 0.5, -Math.PI / 2 + 0.5].map((phi) => lobe(Math.max(8, seg - 4), phi, zTail - 5.5, 2.6,
-    (t) => [2.6 + 0.6 * t, 1.4 + 0.4 * t], (_t, u) => 0.5 - 0.25 * u));
+  // Stabilising "ears": flat lobes carried just below the horizontal.
+  const ears = [Math.PI / 2 + 0.25, -Math.PI / 2 - 0.25].map((phi) => lobe(Math.max(8, seg - 4), phi, zTail - 5.0, 3.4,
+    (t) => [2.8 + 0.8 * t, 1.6 + 0.9 * t], (_t, u) => 0.55 - 0.3 * u));
   return [g, ...ears];
 }
 
@@ -360,32 +363,39 @@ function drachenBag(seg: number): THREE.BufferGeometry[] {
 const BURN_VERT = /* glsl */ `
 #include <begin_vertex>
 {
+  // Local burn: a front of char runs out from the ignition point.
   float bd = distance(position, uIgn);
   float bn = gmNoise(position * 0.3);
   float b = clamp(uBurn * 46.0 - bd - bn * 7.0, 0.0, 10.0) / 10.0;
   vBurn = b;
-  if (b > 0.0) {
-    vec3 ax = vec3(0.0, 0.0, position.z);
-    float cr = gmNoise(position * 0.8 + 3.0);
-    transformed = mix(transformed, ax + (transformed - ax) * (0.2 + 0.4 * cr), b * b);
-    transformed.y -= b * b * 3.5;
-    transformed += normal * (cr - 0.5) * 1.8 * b;
-  }
+  // As the gas goes the whole envelope deflates: burnt fabric collapses
+  // toward a point under the old centre, crumpling as it goes.
+  vec3 cc = vec3(0.0, -2.0 - 3.0 * uBurn, position.z * 0.35);
+  float cr = gmNoise(position * 0.75 + 3.0);
+  float cr2 = gmNoise(position * 2.1 - 5.0);
+  float k = b * b * (0.55 + 0.25 * uBurn);
+  transformed = mix(transformed, cc + (transformed - cc) * (0.3 + 0.35 * cr), k);
+  transformed += normal * ((cr - 0.5) * 2.4 + (cr2 - 0.5) * 0.9) * b;
+  transformed.y -= b * uBurn * 2.5;
 }
 `;
 
 const BURN_FRAG = /* glsl */ `
 #include <map_fragment>
-float bThr = 0.5 + 0.55 * gmNoise(vBPos * 1.1 + 7.0);
-if (vBurn > bThr) discard;
-float bChar = smoothstep(0.0, 0.32, vBurn);
-diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.025, 0.02, 0.016), bChar);
-float bRim = vBurn > 0.001 ? smoothstep(bThr - 0.16, bThr, vBurn) : 0.0;
+// Burnt fabric mostly stays as crumpled char; holes open as it finishes.
+float bN = gmNoise(vBPos * 0.9 + 7.0);
+float bThr = mix(0.9, 0.52, smoothstep(0.6, 1.0, vBurn));
+if (vBurn > 0.6 && bN > bThr) discard;
+float bChar = smoothstep(0.0, 0.3, vBurn);
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.022, 0.018, 0.015), bChar);
+float bFront = vBurn > 0.001 ? smoothstep(0.0, 0.1, vBurn) * (1.0 - smoothstep(0.1, 0.32, vBurn)) : 0.0;
+float bHole = vBurn > 0.55 ? smoothstep(bThr - 0.1, bThr, bN) : 0.0;
+float bRim = bFront * (0.6 + 0.8 * gmNoise(vBPos * 2.3)) + bHole;
 `;
 
 const BURN_EMIT = /* glsl */ `
 #include <emissivemap_fragment>
-totalEmissiveRadiance += vec3(1.0, 0.38, 0.08) * (bRim * 7.0 + bChar * (1.0 - bChar) * 2.5) * uGlow;
+totalEmissiveRadiance += vec3(1.0, 0.3, 0.05) * bRim * 4.0 * uGlow;
 `;
 
 function envelopeMaterial(map: THREE.Texture, normalMap: THREE.Texture, burning: boolean): THREE.MeshStandardMaterial {
@@ -393,6 +403,12 @@ function envelopeMaterial(map: THREE.Texture, normalMap: THREE.Texture, burning:
     map, normalMap, roughness: 0.62, metalness: 0.0, side: burning ? THREE.DoubleSide : THREE.FrontSide,
   });
   mat.normalScale.set(0.9, 0.9);
+  if (!burning) {
+    mat.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_maps>', ENV_OCCLUSION);
+    };
+    mat.customProgramCacheKey = () => 'gm-balloon';
+  }
   if (burning) {
     mat.userData.uBurn = { value: 0 };
     mat.userData.uIgn = { value: new THREE.Vector3() };
@@ -407,7 +423,9 @@ function envelopeMaterial(map: THREE.Texture, normalMap: THREE.Texture, burning:
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>\nuniform float uGlow;\nvarying float vBurn;\nvarying vec3 vBPos;\n${NOISE_GLSL}`)
         .replace('#include <map_fragment>', BURN_FRAG)
-        .replace('#include <emissivemap_fragment>', BURN_EMIT);
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 1.0, bChar);')
+        .replace('#include <emissivemap_fragment>', BURN_EMIT)
+        .replace('#include <lights_fragment_maps>', ENV_OCCLUSION);
     };
     mat.customProgramCacheKey = () => 'gm-balloon-burn';
   }

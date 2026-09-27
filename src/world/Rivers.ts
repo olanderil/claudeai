@@ -60,6 +60,8 @@ interface Segment {
   dw: number;
   /** 1 / |d|² in the plane, for the projection. */
   invLenSq: number;
+  /** A canal: cut into the ground, but painted by its own line set, not here. */
+  canal: boolean;
 }
 
 /** A lake where a river ends inland — a tarn with no outlet. */
@@ -265,7 +267,7 @@ function trace(
   return nodes;
 }
 
-function addRiver(nodes: Node[]): void {
+function addRiver(nodes: Node[], canal = false): void {
   for (let i = 0; i < nodes.length - 1; i++) {
     const a = nodes[i];
     const b = nodes[i + 1];
@@ -279,6 +281,7 @@ function addRiver(nodes: Node[]): void {
       ax: a.x, az: a.z, ay: a.y, aw: a.w,
       dx, dz, dy: b.y - a.y, dw: b.w - a.w,
       invLenSq: 1 / lenSq,
+      canal,
     });
 
     // Index every cell the segment's influence touches.
@@ -295,6 +298,44 @@ function addRiver(nodes: Node[]): void {
         else index.set(key, [id]);
       }
     }
+  }
+}
+
+/**
+ * Cut a canal: a straight-banked channel along the given polyline, its water
+ * held level in pounds between locks. Each stretch of about 700 m takes the
+ * lowest ground along it, less a couple of metres, and holds it — so the canal
+ * steps down at a lock rather than following the ground up and over a rise.
+ *
+ * Needs the world's river settings (for the channel depth), so a canal is only
+ * cut in a world that has rivers.
+ */
+export function addCanal(
+  points: [number, number][],
+  halfWidth: number,
+  sample: (x: number, z: number) => number,
+): void {
+  if (settings === null) return;
+  const depth = settings.depth;
+  // Resample into pounds.
+  const pounds: [number, number][] = [points[0]];
+  for (let i = 0; i < points.length - 1; i++) {
+    const [ax, az] = points[i];
+    const [bx, bz] = points[i + 1];
+    const len = Math.hypot(bx - ax, bz - az);
+    const n = Math.max(1, Math.round(len / 700));
+    for (let k = 1; k <= n; k++) pounds.push([ax + ((bx - ax) * k) / n, az + ((bz - az) * k) / n]);
+  }
+  for (let i = 0; i < pounds.length - 1; i++) {
+    const [ax, az] = pounds[i];
+    const [bx, bz] = pounds[i + 1];
+    let low = Infinity;
+    for (let t = 0; t <= 1.0001; t += 0.05) low = Math.min(low, sample(ax + (bx - ax) * t, az + (bz - az) * t));
+    const y = low - 2.2 + depth - 1.6;
+    addRiver([
+      { x: ax, z: az, y, w: halfWidth },
+      { x: bx, z: bz, y, w: halfWidth },
+    ], true);
   }
 }
 
@@ -318,6 +359,7 @@ export function carveRivers(x: number, z: number, h: number): number {
   const cfg = settings;
   let best = 0;
   let bestBed = 0;
+  let bestCanal = false;
 
   for (let i = 0; i < bucket.length; i++) {
     const s = segments[bucket[i]];
@@ -338,6 +380,7 @@ export function carveRivers(x: number, z: number, h: number): number {
     if (strength > best) {
       best = strength;
       bestBed = s.ay + s.dy * t - cfg.depth;
+      bestCanal = s.canal;
     }
   }
 
@@ -348,7 +391,7 @@ export function carveRivers(x: number, z: number, h: number): number {
   const strength = best * (1 - blocked);
   if (strength <= 0.002) return h;
 
-  strengthHere = strength;
+  if (!bestCanal) strengthHere = strength;
   return lerp(h, Math.min(h, bestBed), strength);
 }
 

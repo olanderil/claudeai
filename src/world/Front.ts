@@ -102,6 +102,8 @@ const A = [0, 0, 0, 0];
 const K = [0, 0, 0, 0];
 const P = [0, 0, 0, 0];
 let base = -4000;
+/** Vertical offset beyond which nothing is carved, whatever the curve's slope. */
+let rejectBeyond = 1e9;
 /** Wobble phases of the no-man's-land edge, home side then far side. */
 const WOB_HOME = [0, 0, 0];
 const WOB_FAR = [0, 0, 0];
@@ -178,6 +180,8 @@ export function setFront(next: FrontSettings | undefined, seed: number): void {
   // Anchored so the line crosses x = 0 exactly `offset` north of the field,
   // whatever the phases do.
   base = -settings.offset - at0;
+  const steepest = A[0] * K[0] + A[1] * K[1] + A[2] * K[2] + A[3] * K[3];
+  rejectBeyond = (settings.width / 2 + 20 + 430) * Math.sqrt(1 + steepest * steepest);
   for (let i = 0; i < 3; i++) {
     WOB_HOME[i] = hash01(i, seed, 917) * Math.PI * 2;
     WOB_FAR[i] = hash01(i, seed, 919) * Math.PI * 2;
@@ -197,6 +201,11 @@ export function setFront(next: FrontSettings | undefined, seed: number): void {
 
 export function frontSettings(): Readonly<FrontSettings> {
   return settings;
+}
+
+/** The per-seed salt every seeded pattern (craters, fields) adds to its hashes. */
+export function frontSalt(): number {
+  return seedSalt;
 }
 
 /** z of the no-man's-land centreline at world x. */
@@ -274,7 +283,7 @@ export function behindLines(x: number, z: number): number {
  */
 export function devastation(u: number): number {
   if (u <= 0) return 1;
-  return 0.95 * Math.exp(-u / 380) + 0.06 * (1 - smoothstep(1000, 2800, u));
+  return 0.95 * Math.exp(-u / 380) + 0.035 * (1 - smoothstep(1000, 2800, u));
 }
 
 /**
@@ -313,7 +322,11 @@ function craterProfile(r: number, depth: number, rim: number): number {
  */
 export function craterHeight(x: number, z: number): number {
   if (settings.craters <= 0) return 0;
-  const d = frontDistance(x, z);
+  // Cheap rejection on the vertical offset alone: the perpendicular distance
+  // is at least the vertical one divided by the steepest the curve ever gets.
+  const dz = z - frontZ(x);
+  if (Math.abs(dz) > rejectBeyond) return 0;
+  const d = dz / frontNorm(x);
   const side: 1 | -1 = d >= 0 ? 1 : -1;
   const u = Math.abs(d) - nmlHalf(x, side);
   if (u > 420) return 0;
@@ -536,7 +549,8 @@ let fieldIndex = new Map<number, Aerodrome[]>();
 const FIELD_MARGIN = 160;
 
 function indexField(a: Aerodrome): void {
-  const reach = Math.hypot(a.halfLength, a.halfWidth + 120) + FIELD_MARGIN;
+  // Wide enough for the tree clearing as well as the painted frame.
+  const reach = Math.max(Math.hypot(a.halfLength, a.halfWidth + 120) + FIELD_MARGIN, a.halfLength + 640);
   for (let gx = Math.floor((a.x - reach) / PAD_BUCKET); gx <= Math.floor((a.x + reach) / PAD_BUCKET); gx++) {
     for (let gz = Math.floor((a.z - reach) / PAD_BUCKET); gz <= Math.floor((a.z + reach) / PAD_BUCKET); gz++) {
       const key = ((gx & 0xffff) << 16) | (gz & 0xffff);
@@ -545,6 +559,26 @@ function indexField(a: Aerodrome): void {
       else fieldIndex.set(key, [a]);
     }
   }
+}
+
+/**
+ * How much of a point an aerodrome keeps clear of trees, 0..1: the landing
+ * ground and its camp, fading out a couple of hundred metres beyond.
+ */
+export function aerodromeClearing(x: number, z: number): number {
+  const bucket = fieldIndex.get(padKey(x, z));
+  if (bucket === undefined) return 0;
+  let c = 0;
+  for (let i = 0; i < bucket.length; i++) {
+    const a = bucket[i];
+    const reach = a.halfLength + (a.main ? 420 : 160);
+    const dx = x - a.x;
+    const dz = z - a.z;
+    const r2 = dx * dx + dz * dz;
+    if (r2 > (reach + 200) * (reach + 200)) continue;
+    c = Math.max(c, 1 - smoothstep(reach, reach + 200, Math.sqrt(r2)));
+  }
+  return c;
 }
 
 /**
@@ -944,7 +978,7 @@ float bfEdge(float s, float side) {
 }
 float bfDensity(float u) {
   if (u <= 0.0) return 1.0;
-  return 0.95 * exp(-u / 380.0) + 0.06 * (1.0 - smoothstep(1000.0, 2800.0, u));
+  return 0.95 * exp(-u / 380.0) + 0.035 * (1.0 - smoothstep(1000.0, 2800.0, u));
 }
 float bfLump(vec2 p) {
   float v = 0.5 + 0.3 * sin(p.x * 0.0047 + 1.3) * cos(p.y * 0.0041 - 0.7)

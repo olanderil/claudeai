@@ -4,7 +4,7 @@ import { terrainHeight, riverStrength, clearingAt } from './Worlds';
 import { farmland, farmlandPlot, farmlandHome } from './Settlements';
 import { forestCover } from './Forest';
 import { FRONT_CONSTS, FRONT_GLSL, fieldLocal, frontUniforms } from './Front';
-import { roadHalfWidth, roadSignedDistance, roadValidity } from './Roads';
+import { roadHalfWidth, roadSignedDistance, roadValidity, waterSignedDistance } from './Roads';
 import type { TerrainStyle } from './Worlds';
 
 export {
@@ -85,6 +85,8 @@ export class Terrain {
     uTimber: { value: new THREE.Vector3(0.05, 0.09, 0.05) },
     /** How much of the open country is laid out in fields, 0..1. */
     uFarm: { value: 0.8 },
+    /** Bare limestone breaking through thin soil, 0..1 (karst, scrub coasts). */
+    uStony: { value: 0 },
   };
 
   private readonly cache = new Map<string, THREE.Mesh>();
@@ -111,7 +113,10 @@ export class Terrain {
     for (const mesh of this.cache.values()) mesh.castShadow = on;
   }
 
-  setStyle(style: TerrainStyle, extra: { beach: number; timber: [number, number, number]; farm: number }): void {
+  setStyle(
+    style: TerrainStyle,
+    extra: { beach: number; timber: [number, number, number]; farm: number; stony: number },
+  ): void {
     this.styleUniforms.uGrass.value.set(...style.grass);
     this.styleUniforms.uDry.value.set(...style.dry);
     this.styleUniforms.uRock.value.set(...style.rock);
@@ -121,6 +126,7 @@ export class Terrain {
     this.styleUniforms.uBeach.value = extra.beach;
     this.styleUniforms.uTimber.value.set(...extra.timber);
     this.styleUniforms.uFarm.value = extra.farm;
+    this.styleUniforms.uStony.value = extra.stony;
   }
 
   /**
@@ -337,6 +343,8 @@ function buildChunkGeometry(node: QuadNode): THREE.BufferGeometry {
   const road = new Float32Array(total * 3);
   /** Aerodrome frame: along, right, half-length, half-width (zero clear of any field). */
   const field = new Float32Array(total * 4);
+  /** Signed distance to the nearest canal and how far to trust it. */
+  const canal = new Float32Array(total * 2);
 
   // Sample the height field once into a grid with a one-vertex border, so the
   // central-difference normals use real neighbours at the chunk edges.
@@ -392,6 +400,9 @@ function buildChunkGeometry(node: QuadNode): THREE.BufferGeometry {
       road[idx * 3 + 1] = rv;
       road[idx * 3 + 2] = roadHalfWidth();
 
+      canal[idx * 2] = waterSignedDistance(wx, wz);
+      canal[idx * 2 + 1] = roadValidity();
+
       const f = fieldLocal(wx, wz);
       if (f !== null) field.set(f, idx * 4);
 
@@ -430,6 +441,8 @@ function buildChunkGeometry(node: QuadNode): THREE.BufferGeometry {
       for (let k = 0; k < 4; k++) settled[next * 4 + k] = settled[src * 4 + k];
       for (let k = 0; k < 4; k++) field[next * 4 + k] = field[src * 4 + k];
       for (let k = 0; k < 3; k++) road[next * 3 + k] = road[src * 3 + k];
+      canal[next * 2] = canal[src * 2];
+      canal[next * 2 + 1] = canal[src * 2 + 1];
       river[next] = river[src];
       forest[next] = forest[src];
       next++;
@@ -468,6 +481,7 @@ function buildChunkGeometry(node: QuadNode): THREE.BufferGeometry {
   geo.setAttribute('aForest', new THREE.BufferAttribute(forest, 1));
   geo.setAttribute('aRoad', new THREE.BufferAttribute(road, 3));
   geo.setAttribute('aField', new THREE.BufferAttribute(field, 4));
+  geo.setAttribute('aCanal', new THREE.BufferAttribute(canal, 2));
   geo.setIndex(indices);
   // Bound the geometry where it actually is, or a summit chunk falls outside
   // its own bounds and is culled while still on screen.
@@ -594,7 +608,9 @@ function createTerrainMaterial(
          attribute vec3 aRoad;
          varying vec3 vRoad;
          attribute vec4 aField;
-         varying vec4 vField;`,
+         varying vec4 vField;
+         attribute vec2 aCanal;
+         varying vec2 vCanal;`,
       )
       .replace(
         '#include <beginnormal_vertex>',
@@ -604,7 +620,8 @@ function createTerrainMaterial(
          vRiver = aRiver;
          vForest = aForest;
          vRoad = aRoad;
-         vField = aField;`,
+         vField = aField;
+         vCanal = aCanal;`,
       )
       .replace(
         '#include <begin_vertex>',
@@ -623,6 +640,7 @@ function createTerrainMaterial(
          varying float vForest;
          varying vec3 vRoad;
          varying vec4 vField;
+         varying vec2 vCanal;
          uniform vec3 uGrass;
          uniform vec3 uDry;
          uniform vec3 uRock;
@@ -632,6 +650,7 @@ function createTerrainMaterial(
          uniform float uBeach;
          uniform vec3 uTimber;
          uniform float uFarm;
+         uniform float uStony;
 
          float tHash(vec2 p) {
            p = fract(p * vec2(123.34, 456.21));
@@ -700,6 +719,18 @@ function createTerrainMaterial(
                           * (1.0 - smoothstep(0.55, 0.85, slope));
            col = mix(col, snow, snowLine);
 
+           // Limestone breaking through thin soil: grey pavement, scrub and
+           // red earth in the hollows — the Carso, the Gallipoli scrub.
+           if (uStony > 0.001) {
+             float bare = smoothstep(0.5, 0.66, tFbm(wp * 0.0065 + 11.0) * 0.7 + fine * 0.3 + slope * 0.6);
+             vec3 pavement = mix(rock, rock * vec3(1.05, 1.0, 0.92), fine) * 0.78;
+             vec3 terra = uDry * vec3(1.15, 0.78, 0.55);
+             col = mix(col, pavement, bare * uStony);
+             col = mix(col, terra, smoothstep(0.62, 0.74, mottle) * (1.0 - bare) * uStony * 0.6);
+             float scrubVis = 1.0 - smoothstep(0.4, 2.5, fw);
+             col *= mix(1.0, 0.75 + 0.35 * tNoise(wp * 0.35), scrubVis * uStony * 0.7);
+           }
+
            if (uStrata > 0.0) {
              float band = 0.5 + 0.5 * sin(h * 0.0555 + broad * 1.4);
              col = mix(col, col * vec3(1.22, 0.80, 0.62), uStrata * band * 0.5);
@@ -710,21 +741,28 @@ function createTerrainMaterial(
            // an exact integer hash so the tree scatter can find the hedges.
            float farmCover = 0.0;
            if (uFarm > 0.001) {
-             ivec2 rg = ivec2(floor(wp / 2600.0));
-             float ang = bfHash(rg, 901u) * 3.14159;
+             // Districts with wandering borders, so from altitude the country
+             // is not a quilt of squares. Mirrored on the CPU for the hedges.
+             vec2 dw = wp + vec2(sin(wp.y * 0.0011 + 0.4), sin(wp.x * 0.0013 + 1.9)) * 520.0;
+             ivec2 rg = ivec2(floor(dw / 2600.0));
+             uint fs = uint(uFrontSalt);
+             float ang = bfHash(rg, 901u + fs) * 3.14159;
              float ca = cos(ang);
              float sa = sin(ang);
              vec2 lp = vec2(ca * wp.x + sa * wp.y, -sa * wp.x + ca * wp.y);
              lp += vec2(sin(lp.y * 0.0041), sin(lp.x * 0.0033)) * 22.0;
-             vec2 size = vec2(150.0, 230.0) * (0.75 + 0.6 * bfHash(rg, 902u));
+             vec2 size = vec2(150.0, 230.0) * (0.75 + 0.6 * bfHash(rg, 902u + fs));
              vec2 gcell = floor(lp / size);
              vec2 within = fract(lp / size);
              ivec2 fc = ivec2(gcell) + rg * 977;
-             float pick = bfHash(fc, 903u);
-             vec3 tone = pick < 0.26 ? mix(uDry, uGrass, 0.3) * 1.08
-                       : pick < 0.58 ? uGrass * 1.05
-                       : pick < 0.78 ? mix(uGrass, uDry, 0.38)
-                       : pick < 0.9 ? uDry * 0.66 + vec3(0.012, 0.004, 0.0)
+             float pick = bfHash(fc, 903u + fs);
+             // Wheat and stubble, pasture, roots, ploughland, fallow.
+             vec3 wheat = uDry * vec3(1.28, 1.18, 0.78);
+             vec3 plough = uDry * vec3(0.62, 0.5, 0.4);
+             vec3 tone = pick < 0.24 ? wheat
+                       : pick < 0.56 ? uGrass * 1.05
+                       : pick < 0.74 ? mix(uGrass, wheat, 0.35) * 1.02
+                       : pick < 0.88 ? plough
                        : uGrass * 0.84;
              tone *= 0.88 + 0.22 * bfHash(fc, 904u);
              // Furrows, up close: the direction of ploughing per field.
@@ -734,46 +772,49 @@ function createTerrainMaterial(
              vec2 bd = (0.5 - abs(within - 0.5)) * size;
              float edge = bfLine(min(bd.x, bd.y), 1.6, fw);
              tone = mix(tone, uGrass * 0.55, edge * 0.55);
-             farmCover = uFarm * (1.0 - smoothstep(0.07, 0.18, slope))
-                       * smoothstep(0.30, 0.46, broad + mottle * 0.25)
-                       * (1.0 - snowLine);
+             // Rough pasture and common between the fields in the thinner
+             // farming worlds, decided per field so the edge is a hedge.
+             float kept = step(bfHash(fc, 906u + fs), uFarm * 1.15);
+             farmCover = kept * min(1.0, uFarm * 1.5) * (1.0 - smoothstep(0.07, 0.18, slope))
+                       * (1.0 - snowLine)
+                       * (1.0 - smoothstep(uTreeLine - 500.0, uTreeLine - 250.0, h));
              col = mix(col, tone, farmCover * 0.68);
            }
 
-           // The ordinary village's belt of soft plots.
-           if (vSettled.w > 0.001) {
-             float plots = smoothstep(0.45, 0.55, tFbm(wp * 0.011));
-             vec3 stubble = uDry * 0.78;
-             vec3 crop    = uGrass * 1.55;
-             col = mix(col, mix(stubble, crop, plots),
-                       vSettled.w * (1.0 - smoothstep(0.08, 0.22, slope)));
+           // Round each village, its own closes and strips, in the village's
+           // grid: the same crops as the open country, smaller and tighter.
+           vec3 wheatV = uDry * vec3(1.28, 1.18, 0.78);
+           vec3 ploughV = uDry * vec3(0.62, 0.5, 0.4);
+           // Where the country is not farmed field to field — the desert —
+           // a village is an oasis: irrigated gardens and palm groves.
+           if (vSettled.w > 0.001 && uFarm < 0.5) {
+             ivec2 gc = ivec2(floor(wp / vec2(38.0, 55.0)));
+             float g = bfHash(gc, 907u);
+             vec3 garden = g < 0.55 ? vec3(0.07, 0.12, 0.04) : g < 0.8 ? vec3(0.10, 0.14, 0.05) : uDry * 0.7;
+             vec2 gb = (0.5 - abs(fract(wp / vec2(38.0, 55.0)) - 0.5)) * vec2(38.0, 55.0);
+             garden = mix(garden, uDry * 0.8, bfLine(min(gb.x, gb.y), 1.0, fw) * 0.6);
+             col = mix(col, garden, smoothstep(0.35, 0.8, vSettled.w) * (1.0 - uFarm * 2.0) * 0.85);
            }
-
-           // The field village's hedged patchwork, in the village's own grid.
-           // Not \`out\`, \`half\` or \`patch\`: all reserved in GLSL.
            if (vSettled.x > 0.001) {
              float afield = clamp(length(vSettled.yz) / 1400.0, 0.0, 1.0);
-             vec2 acre = vec2(74.0 + afield * 130.0, 108.0 + afield * 190.0);
+             vec2 acre = vec2(60.0 + afield * 110.0, 95.0 + afield * 160.0);
              vec2 wander = vec2(tFbm(vSettled.yz * 0.0021 + 4.0),
                                 tFbm(vSettled.yz * 0.0021 + 19.0)) - 0.5;
              vec2 grid = (vSettled.yz + wander * 150.0) / acre;
              vec2 plot = floor(grid);
              vec2 within = fract(grid);
              float pick = tHash(plot * 0.37 + 3.1);
-             vec3 stubble  = uDry * 0.86;
-             vec3 growing  = uGrass * 1.34;
-             vec3 ploughed = uDry * 0.62;
-             vec3 tone = pick < 0.36 ? stubble : (pick < 0.78 ? growing : ploughed);
-             tone *= 0.9 + 0.2 * tHash(plot * 1.7 + 8.3);
-             tone = mix(tone, tone * 1.12, mottle);
-             vec2 margin = abs(within - 0.5);
-             float hedge = max(smoothstep(0.445, 0.5, margin.x),
-                               smoothstep(0.455, 0.5, margin.y));
-             tone = mix(tone, uGrass * 0.52, hedge * 0.55);
+             vec3 tone = pick < 0.3 ? wheatV
+                       : pick < 0.6 ? uGrass * 1.08
+                       : pick < 0.8 ? mix(uGrass, wheatV, 0.35)
+                       : ploughV;
+             tone *= 0.92 + 0.16 * tHash(plot * 1.7 + 8.3);
+             vec2 bd = (0.5 - abs(within - 0.5)) * acre;
+             float hedge = bfLine(min(bd.x, bd.y), 1.4, fw);
+             tone = mix(tone, uGrass * 0.55, hedge * 0.55);
              float worked = smoothstep(0.26, 0.46, tHash(plot * 0.91 + 5.7));
-             col = mix(col, tone,
-                       vSettled.x * worked * 0.82
-                       * (1.0 - smoothstep(0.08, 0.22, slope)));
+             col = mix(col, tone, vSettled.x * worked * 0.78 * (1.0 - smoothstep(0.08, 0.22, slope)));
+             farmCover = max(farmCover, vSettled.x * worked);
            }
 
            // Woods, from the same forest cover the 3D trees stand on. Near
@@ -785,11 +826,30 @@ function createTerrainMaterial(
              col = mix(col, uTimber * clump, canopy * (1.0 - shatter) * 0.94);
            }
 
-           // Patchiness at a scale that still reads from altitude.
-           col *= 0.82 + 0.30 * mottle + 0.14 * fine;
+           // Patchiness at a scale that still reads from altitude, and turf up
+           // close so the ground under the wheels is grass, not paint.
+           col *= 1.0 + (0.2 * mottle + 0.12 * fine - 0.16) * (1.0 - farmCover * 0.65);
+           {
+             float turfVis = 1.0 - smoothstep(0.08, 0.5, fw);
+             if (turfVis > 0.0) {
+               float t1 = tNoise(wp * 3.1);
+               float t2 = tNoise(wp * 11.0 + 7.0);
+               col *= mix(1.0, 0.8 + 0.28 * t1 + 0.14 * t2, turfVis * (1.0 - bfMud));
+             }
+           }
 
-           // Rivers and canals: terrain shaded and polished until it reads as water.
+           // Rivers: terrain shaded and polished until it reads as water.
            col = mix(col, vec3(0.030, 0.062, 0.072), smoothstep(0.05, 0.48, vRiver));
+           // Canals: ruled straight, so drawn from their signed distance like
+           // the roads — crisp at every level of detail, where the river mask
+           // would break into dashes on the coarse chunks.
+           float canalW = 0.0;
+           if (vCanal.y > 0.985) {
+             canalW = bfLine(abs(vCanal.x), 11.0, fw);
+             float bank = max(0.0, bfLine(abs(vCanal.x), 13.5, fw) - canalW);
+             col = mix(col, uDry * 0.7, bank * 0.7);
+             col = mix(col, vec3(0.028, 0.05, 0.056), canalW);
+           }
 
            // Roads: pale, dusty, a darker verge either side. Only where every
            // vertex of the triangle agreed there was a road near, or a sign
@@ -800,7 +860,7 @@ function createTerrainMaterial(
              float fade = smoothstep(-10.0, 240.0, bfU);
              float cov = bfLine(abs(vRoad.x), rw, fw) * fade;
              float verge = max(0.0, bfLine(abs(vRoad.x), rw + 2.6, fw) * fade - cov);
-             vec3 roadCol = mix(uDry * 1.05 + 0.02, vec3(0.40, 0.385, 0.35), 0.45);
+             vec3 roadCol = mix(uDry * 0.95 + 0.01, vec3(0.33, 0.315, 0.29), 0.45);
              roadCol = mix(roadCol, uGrass * 1.1, sandy * 0.5);
              col = mix(col, col * 0.78, verge * 0.6);
              col = mix(col, roadCol * (0.9 + 0.16 * fine), cov);
@@ -826,7 +886,12 @@ function createTerrainMaterial(
              // Wheel-worn lanes along the run, and a trodden apron by the hangars.
              float lanes = bfLine(abs(abs(ri) - W * 0.3), 7.0, fw) * 0.28;
              mown = mix(mown, uDry * 0.9, lanes);
-             col = mix(col, mown, inField * 0.9);
+             col = mix(col, mown, inField * 0.92);
+             // The boundary: a line of marker flags and a mown edge.
+             float bx = abs(abs(al) - L);
+             float by = abs(abs(ri) - W);
+             float boundary = max(bfLine(bx, 1.2, fw) * step(abs(ri), W), bfLine(by, 1.2, fw) * step(abs(al), L));
+             col = mix(col, uGrass * 0.6, boundary * 0.5);
              float apron = (1.0 - smoothstep(20.0, 45.0, abs(ri + W + 20.0)))
                          * (1.0 - smoothstep(130.0, 190.0, abs(al + L * 0.55 - 60.0)));
              col = mix(col, uDry * (0.78 + 0.2 * fine), apron * 0.75);
@@ -857,7 +922,7 @@ function createTerrainMaterial(
 
              vec3 soil = mix(vec3(0.13, 0.094, 0.06), uDry * 0.6, 0.25 + 0.65 * sandy);
              vec3 dark = soil * vec3(0.56, 0.5, 0.44);
-             vec3 chalkC = vec3(0.54, 0.515, 0.455);
+             vec3 chalkC = vec3(0.56, 0.52, 0.43);
              vec3 spoil = mix(soil * 1.4, chalkC, chalk * 0.9);
              spoil = mix(spoil, uGrass * 1.08, sandy);
              dark = mix(dark, uGrass * 0.62, sandy * 0.6);
@@ -919,6 +984,7 @@ function createTerrainMaterial(
                  // Fresh holes in a field show their spoil loud and clear; in
                  // no-man's-land every rim is just more of the same porridge.
                  vec3 bowlCol = mix(mix(dark * 0.75, soil * 0.95, bestR * bestR), disturbed * 0.8, chalk * 0.45);
+                 bowlCol = mix(bowlCol, soil * 1.1, (1.0 - churn) * 0.35);
                  vec3 rimCol = mix(spoil, disturbed * 1.08, churn * 0.75);
                  vec3 cc = col;
                  cc = mix(cc, rimCol, ejecta * (0.22 + 0.35 * chalk) * smoothstep(0.35, 0.75, c2 + 0.25));
@@ -998,14 +1064,26 @@ function createTerrainMaterial(
                vec3 cut = mix(vec3(0.028, 0.024, 0.02), dark * 0.4, 0.3);
                vec3 spoilT = mix(spoil, soil, 0.35 * c1) * (0.92 + 0.12 * c2);
                float spoilW = 3.2 + 1.8 * chalk;
+               // The spoil is thrown, not laid: its width wanders and it is
+               // broken where shells have scattered it.
+               spoilW *= 0.7 + 0.6 * tNoise(wp * 0.045 + 3.0);
                float sp = max(max(bfLine(dSup, 1.0 + spoilW * 0.85, fw), bfLine(dRes, 0.9 + spoilW * 0.7, fw)),
                               max(bfLine(dComm, 0.8 + spoilW * 0.6, fw), bfLine(dFire, 1.15 + spoilW, fw)));
+               sp *= mix(1.0, smoothstep(0.25, 0.55, c1 * 0.6 + c2 * 0.4), clodVis * 0.8);
                sp = max(sp, max(bfLine(dSap, 0.7 + spoilW * 0.5, fw), bfLine(dPost, 2.4 + spoilW * 0.6, fw)));
                float ct = max(max(bfLine(dSup, 1.0, fw), bfLine(dRes, 0.9, fw)),
                               max(bfLine(dComm, 0.75, fw), bfLine(dFire, 1.15, fw)));
                ct = max(ct, max(bfLine(dSap, 0.65, fw), bfLine(dPost, 1.8, fw)));
-               col = mix(col, spoilT, sp * tv * (0.7 + 0.25 * smoothstep(0.3, 0.6, c1)));
+               // Bold where it crosses fields — the white scars of every aerial
+               // photograph — and only a smoother band amid the churn.
+               col = mix(col, spoilT, sp * tv * mix(0.9, 0.45, churn) * (0.75 + 0.25 * smoothstep(0.3, 0.6, c1)));
                col = mix(col, cut, ct * tv);
+               // Up close, the floor of the trench: a strip of duckboard.
+               float floorVis = 1.0 - smoothstep(0.15, 0.6, fw);
+               if (floorVis > 0.0) {
+                 float fl = max(bfLine(dFire, 0.3, fw), max(bfLine(dSup, 0.25, fw), bfLine(dComm, 0.22, fw)));
+                 col = mix(col, vec3(0.075, 0.058, 0.042), fl * floorVis * tv * (1.0 - smoothstep(0.5, 0.9, flooded)));
+               }
                bfWater = max(bfWater, ct * tv * smoothstep(0.4, 0.9, flooded) * 0.85);
              }
 
@@ -1015,15 +1093,26 @@ function createTerrainMaterial(
              float beltB = 1.0 - smoothstep(4.0, 6.5, abs(u + 58.0 + 6.0 * sin(s * 0.009 + q.y)));
              float belt = max(beltA, beltB * 0.8) * (1.0 - steep) * smoothstep(0.5, 2.5, h);
              if (belt > 0.001) {
-               float hA = bfLine(abs(fract((s + u) / 2.3) - 0.5) * 2.3, 0.13, fw);
-               float hB = bfLine(abs(fract((s - u) / 2.9) - 0.5) * 2.9, 0.13, fw);
-               float pick = bfLine(length(fract(wp / 3.0) - 0.5) * 3.0, 0.22, fw);
-               vec3 wireCol = vec3(0.13, 0.115, 0.10);
-               col = mix(col, wireCol, belt * clamp(0.2 + 0.75 * max(max(hA, hB), pick), 0.0, 1.0));
+               // Coils and knife-rests: loops of wire along the belt, pickets
+               // at irregular spacing, and a grey-brown stain where rust and
+               // trampled ground meet.
+               float wob = tNoise(wp * 0.7) * 1.4;
+               float coilA = bfLine(abs(fract((s + wob) / 1.9) - 0.5) * 1.9, 0.09, fw);
+               float coilB = bfLine(abs(fract((u + 0.6 * s + wob * 1.3) / 2.6) - 0.5) * 2.6, 0.08, fw);
+               vec2 pc = floor(wp / 2.8);
+               ivec2 pic = ivec2(pc);
+               vec2 po = (pc + 0.5 + (vec2(bfHash(pic, 511u), bfHash(pic, 512u)) - 0.5) * 0.7) * 2.8;
+               float pick = bfLine(length(wp - po), 0.16, fw) * step(bfHash(pic, 513u), 0.6);
+               float tangle = max(coilA * 0.8, max(coilB * 0.6, pick));
+               vec3 wireCol = vec3(0.12, 0.10, 0.085);
+               col = mix(col, wireCol, belt * clamp(0.28 + 0.6 * tangle, 0.0, 1.0));
              }
 
            }
 
+           // Craters and trenches break the canal banks: what is left of the
+           // water there is pools, not a channel.
+           bfWater = max(bfWater, canalW * smoothstep(-40.0, 120.0, bfU));
            // Standing water: shell holes, flooded trenches. Dark, and the
            // roughness chunk polishes it so it takes the sky.
            col = mix(col, vec3(0.02, 0.026, 0.028), bfWater);
@@ -1055,6 +1144,14 @@ function createTerrainMaterial(
          }`,
       )
       .replace(
+        '#include <lights_fragment_maps>',
+        `#include <lights_fragment_maps>
+         #if defined( RE_IndirectSpecular )
+           // Muddy water under a bright sky: it takes the sky, but darkly.
+           radiance *= mix(1.0, 0.42, max(bfWater, smoothstep(0.06, 0.5, vRiver)));
+         #endif`,
+      )
+      .replace(
         '#include <roughnessmap_fragment>',
         `#include <roughnessmap_fragment>
          {
@@ -1063,14 +1160,14 @@ function createTerrainMaterial(
            roughnessFactor = mix(roughnessFactor, 0.55,
              smoothstep(uSnowLine - 380.0, uSnowLine, vTerrainPos.y));
            // Wet mud has a sheen; water takes the sky.
-           roughnessFactor = mix(roughnessFactor, 0.09, smoothstep(0.06, 0.5, vRiver));
-           roughnessFactor = mix(roughnessFactor, 0.3, bfWater);
+           roughnessFactor = mix(roughnessFactor, 0.14, smoothstep(0.06, 0.5, vRiver));
+           roughnessFactor = mix(roughnessFactor, 0.36, bfWater);
          }`,
       );
   };
 
   // Any change to the injected source needs a distinct key or three reuses a
   // stale compiled program.
-  material.customProgramCacheKey = () => 'terrain-splat-v11-front';
+  material.customProgramCacheKey = () => 'terrain-splat-v13-front';
   return material;
 }

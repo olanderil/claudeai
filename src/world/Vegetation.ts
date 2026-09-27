@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { forestPattern, forestStyle, shatterAt } from './Forest';
-import { behindLines, hash01 } from './Front';
+import { aerodromeClearing, behindLines, frontSalt, hash01 } from './Front';
 import { roadSegments } from './Roads';
 import { settlements } from './Settlements';
 import { activeWorld, forestAt, terrainHeight, type TreePalette } from './Worlds';
@@ -27,7 +27,7 @@ import { SEA_LEVEL } from './Sea';
 type Kind = 'broadleaf' | 'conifer' | 'poplar' | 'palm' | 'shrub' | 'dead';
 const KINDS: Kind[] = ['broadleaf', 'conifer', 'poplar', 'palm', 'shrub', 'dead'];
 
-const TILE = 400;
+const TILE = 200;
 const NEAR = 1500;
 const FAR = 3600;
 /** Share of trees that survive into the far ring. */
@@ -37,7 +37,7 @@ const WOOD_STEP = 9.5;
 /** Spacing of the lattice the forest cover is evaluated on, metres. */
 const COVER_STEP = 20;
 /** Per-frame generation budget, milliseconds. */
-const BUDGET_MS = 3;
+const BUDGET_MS = 2.5;
 
 const CAPACITY: Record<Kind, [number, number]> = {
   // [near-only, both rings]
@@ -49,15 +49,56 @@ const CAPACITY: Record<Kind, [number, number]> = {
   dead: [20000, 10000],
 };
 
-interface TileData {
-  /** Per kind: matrices and colours, near-only and both-rings. */
-  near: Record<Kind, { m: number[]; c: number[] }>;
-  far: Record<Kind, { m: number[]; c: number[] }>;
+/** A growable pair of typed arrays: instance matrices and colours. */
+class InstanceList {
+  m = new Float32Array(16 * 8);
+  c = new Float32Array(3 * 8);
+  n = 0;
+  /**
+   * Shuffle the instances, deterministically, so that drawing the first N of
+   * them is an even thinning of the whole tile rather than its first rows.
+   */
+  shuffle(seed: number): void {
+    const m = new Float32Array(16);
+    const c = new Float32Array(3);
+    for (let i = this.n - 1; i > 0; i--) {
+      const j = Math.floor(hash01(i, seed, 977) * (i + 1));
+      if (j === i) continue;
+      m.set(this.m.subarray(i * 16, i * 16 + 16));
+      this.m.copyWithin(i * 16, j * 16, j * 16 + 16);
+      this.m.set(m, j * 16);
+      c.set(this.c.subarray(i * 3, i * 3 + 3));
+      this.c.copyWithin(i * 3, j * 3, j * 3 + 3);
+      this.c.set(c, j * 3);
+    }
+  }
+
+  add(e: ArrayLike<number>, r: number, g: number, b: number): void {
+    if ((this.n + 1) * 16 > this.m.length) {
+      const m = new Float32Array(this.m.length * 2);
+      m.set(this.m);
+      this.m = m;
+      const c = new Float32Array(this.c.length * 2);
+      c.set(this.c);
+      this.c = c;
+    }
+    this.m.set(e as Float32Array, this.n * 16);
+    this.c[this.n * 3] = r;
+    this.c[this.n * 3 + 1] = g;
+    this.c[this.n * 3 + 2] = b;
+    this.n++;
+  }
 }
 
-function emptyLists(): Record<Kind, { m: number[]; c: number[] }> {
-  const out = {} as Record<Kind, { m: number[]; c: number[] }>;
-  for (const k of KINDS) out[k] = { m: [], c: [] };
+interface TileData {
+  /** Per kind: matrices and colours, near-only and both-rings. */
+  near: Record<Kind, InstanceList>;
+  far: Record<Kind, InstanceList>;
+}
+
+function emptyLists(): Record<Kind, InstanceList> {
+  const out = {} as Record<Kind, InstanceList>;
+  for (const k of KINDS) out[k] = new InstanceList();
   return out;
 }
 
@@ -201,7 +242,7 @@ function deadGeometry(): THREE.BufferGeometry {
   stub.translate(0, 0.9, 0);
   stub.rotateZ(0.9);
   stub.translate(0.1, 3.2, 0);
-  const grey: [number, number, number] = [0.30, 0.28, 0.25];
+  const grey: [number, number, number] = [0.13, 0.12, 0.105];
   return mergeGeometries([coloured(g, () => grey, 0), coloured(stub, () => grey, 0)], false);
 }
 
@@ -283,7 +324,9 @@ export class Vegetation {
   private dirty = false;
   private season = 1;
   private time = 0;
-  private palette: TreePalette = { broadleaf: 1, conifer: 0, poplar: 1, palm: 0, shrub: 0, dead: 0 } as TreePalette;
+  private palette: TreePalette = { broadleaf: 1, conifer: 0, poplar: 1, palm: 0, shrub: 0 };
+  /** Share of instances drawn, from the quality preset. */
+  private density = 1;
 
   constructor() {
     this.rings = {} as Record<Kind, { near: Ring; far: Ring }>;
@@ -331,6 +374,18 @@ export class Vegetation {
     this.applySeason();
   }
 
+  /**
+   * Thin the forest for slower machines: a fixed fraction of every tile's
+   * instances is drawn (the tiles are shuffled once, so the fraction is an even
+   * thinning, not a missing corner).
+   */
+  setDensity(d: number): void {
+    const next = Math.max(0.1, Math.min(1, d));
+    if (next === this.density) return;
+    this.density = next;
+    this.dirty = true;
+  }
+
   /** 0 spring, 1 summer, 2 autumn, 3 winter. */
   setSeason(index: number): void {
     this.season = index;
@@ -366,9 +421,11 @@ export class Vegetation {
         ring.uniforms.uTime.value = this.time;
       }
     }
-    if (Math.hypot(focus.x - this.lastFocus.x, focus.z - this.lastFocus.z) > TILE * 0.5) this.refresh(focus);
+    if (Math.hypot(focus.x - this.lastFocus.x, focus.z - this.lastFocus.z) > TILE) this.refresh(focus);
+    // Building and uploading never share a frame: each is a few milliseconds
+    // at worst, and together they would be a visible hitch.
     if (this.pending.length > 0) this.build(BUDGET_MS);
-    if (this.dirty && this.pending.length === 0) this.upload();
+    else if (this.dirty) this.upload();
   }
 
   private refresh(focus: THREE.Vector3): void {
@@ -434,27 +491,32 @@ export class Vegetation {
         const tile = this.tiles.get(key);
         if (!tile) continue;
         const a = tile.far[kind];
-        const count = a.m.length / 16;
+        const count = Math.ceil(a.n * this.density);
         if (count > 0 && f + count <= CAPACITY[kind][1]) {
-          fm.set(a.m, f * 16);
-          fc.set(a.c, f * 3);
+          fm.set(a.m.subarray(0, count * 16), f * 16);
+          fc.set(a.c.subarray(0, count * 3), f * 3);
           f += count;
         }
         if (!this.wantedNear.has(key)) continue;
         const b = tile.near[kind];
-        const nb = b.m.length / 16;
+        const nb = Math.ceil(b.n * this.density);
         if (nb > 0 && n + nb <= CAPACITY[kind][0]) {
-          nm.set(b.m, n * 16);
-          nc.set(b.c, n * 3);
+          nm.set(b.m.subarray(0, nb * 16), n * 16);
+          nc.set(b.c.subarray(0, nb * 3), n * 3);
           n += nb;
         }
       }
       near.count = n;
       far.count = f;
-      near.instanceMatrix.needsUpdate = true;
-      far.instanceMatrix.needsUpdate = true;
-      near.instanceColor!.needsUpdate = true;
-      far.instanceColor!.needsUpdate = true;
+      // Upload only what is in use, not the whole capacity.
+      for (const [mesh, count] of [[near, n], [far, f]] as [THREE.InstancedMesh, number][]) {
+        mesh.instanceMatrix.clearUpdateRanges();
+        mesh.instanceMatrix.addUpdateRange(0, Math.max(1, count) * 16);
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.instanceColor!.clearUpdateRanges();
+        mesh.instanceColor!.addUpdateRange(0, Math.max(1, count) * 3);
+        mesh.instanceColor!.needsUpdate = true;
+      }
     }
   }
 
@@ -483,8 +545,7 @@ function push(
   _s.set(width, height, width);
   _m.compose(_p, _q, _s);
   const list = far ? tile.far[kind] : tile.near[kind];
-  for (let i = 0; i < 16; i++) list.m.push(_m.elements[i]);
-  list.c.push(tint[0], tint[1], tint[2]);
+  list.add(_m.elements, tint[0], tint[1], tint[2]);
 }
 
 function tint(x: number, z: number, salt: number, spread: number): [number, number, number] {
@@ -567,6 +628,9 @@ function generateTile(tx: number, tz: number, palette: TreePalette): TileData {
     }
   }
 
+  // ------------------------------------------------------------- hedgerows
+  hedgerows(tile, x0, z0);
+
   // ---------------------------------------------------------- road poplars
   if (palette.poplar > 0) {
     for (const s of roadSegments()) {
@@ -594,7 +658,7 @@ function generateTile(tx: number, tz: number, palette: TreePalette): TileData {
           const y = terrainHeight(x, z);
           if (y < SEA_LEVEL + 1) continue;
           const u = behindLines(x, z);
-          const shatter = shatterAt(u + 200);
+          const shatter = shatterAt(u - 250);
           const far = hash01(id, s.road, 32) < 0.5;
           if (shatter > 0.02 && hash01(id, s.road, 33) < shatter) {
             if (u < 0 || hash01(id, s.road, 34) > 0.6) continue;
@@ -602,7 +666,7 @@ function generateTile(tx: number, tz: number, palette: TreePalette): TileData {
               tint(x, z, 7, 0.25), far);
             continue;
           }
-          const size = 0.9 + hash01(id, s.road, 37) * 0.3;
+          const size = 0.78 + hash01(id, s.road, 37) * 0.5;
           const kind: Kind = palette.poplar >= palette.broadleaf * 0.5 || hash01(id, 2, 38) < 0.5 ? 'poplar' : 'broadleaf';
           push(tile, kind, x, y - 0.3, z, size * (kind === 'poplar' ? 1 : 1.1), size, hash01(id, 3, 39) * 6.28,
             tint(x, z, 9, 0.2), far);
@@ -615,7 +679,7 @@ function generateTile(tx: number, tz: number, palette: TreePalette): TileData {
   for (const v of settlements()) {
     if (Math.abs(v.x - (x0 + TILE / 2)) > TILE / 2 + 260 || Math.abs(v.z - (z0 + TILE / 2)) > TILE / 2 + 260) continue;
     const u = behindLines(v.x, v.z);
-    const shatter = shatterAt(u + 300);
+    const shatter = shatterAt(u - 350);
     const palms = palette.palm > 0;
     const step = palms ? 11 : 15;
     for (let j = Math.floor((z0 - v.z) / step); (v.z + j * step) < z0 + TILE; j++) {
@@ -671,5 +735,120 @@ function generateTile(tx: number, tz: number, palette: TreePalette): TileData {
     }
   }
 
+  for (const kind of KINDS) {
+    tile.near[kind].shuffle(tx * 7919 + tz);
+    tile.far[kind].shuffle(tx * 104729 + tz);
+  }
   return tile;
+}
+
+// ------------------------------------------------------------------ hedgerows
+
+/**
+ * Trees along the field boundaries the terrain paints.
+ *
+ * The CPU twin of the shader's patchwork: the same warped districts, the same
+ * rotation and field size per district, the same integer hash for which fields
+ * are farmed. A hedge is laid along a boundary only between two farmed fields,
+ * and only on the share of boundaries the world asks for; it grows as a line
+ * of broadleaf trees with gaps, and near the lines it is a row of stumps.
+ */
+function hedgerows(tile: TileData, x0: number, z0: number): void {
+  const world = activeWorld();
+  const farm = world.farmland ?? 0.8;
+  const share = world.hedges ?? 0;
+  if (farm <= 0 || share <= 0) return;
+  const fs = frontSalt();
+  const district = (x: number, z: number): [number, number] => {
+    const dx = x + Math.sin(z * 0.0011 + 0.4) * 520;
+    const dz = z + Math.sin(x * 0.0013 + 1.9) * 520;
+    return [Math.floor(dx / 2600), Math.floor(dz / 2600)];
+  };
+  // Districts touching this tile.
+  const seen = new Set<string>();
+  const regions: [number, number][] = [];
+  for (let i = 0; i <= 4; i++) {
+    for (let j = 0; j <= 4; j++) {
+      const r = district(x0 + (i / 4) * TILE, z0 + (j / 4) * TILE);
+      const k = `${r[0]}:${r[1]}`;
+      if (!seen.has(k)) { seen.add(k); regions.push(r); }
+    }
+  }
+  const kept = (cx: number, cz: number, rx: number, rz: number): boolean =>
+    hash01(cx + rx * 977, cz + rz * 977, 906 + fs) < farm * 1.15;
+  for (const [rx, rz] of regions) {
+    const ang = hash01(rx, rz, 901 + fs) * 3.14159;
+    const ca = Math.cos(ang);
+    const sa = Math.sin(ang);
+    const scale = 0.75 + 0.6 * hash01(rx, rz, 902 + fs);
+    const size = [150 * scale, 230 * scale];
+    // The tile's extent in the district's rotated frame, with room for the warp.
+    let lo0 = Infinity; let hi0 = -Infinity; let lo1 = Infinity; let hi1 = -Infinity;
+    for (const [cx, cz] of [[x0, z0], [x0 + TILE, z0], [x0, z0 + TILE], [x0 + TILE, z0 + TILE]]) {
+      const a = ca * cx + sa * cz;
+      const b = -sa * cx + ca * cz;
+      lo0 = Math.min(lo0, a); hi0 = Math.max(hi0, a); lo1 = Math.min(lo1, b); hi1 = Math.max(hi1, b);
+    }
+    lo0 -= 30; hi0 += 30; lo1 -= 30; hi1 += 30;
+    for (const axis of [0, 1]) {
+      const across = size[axis];
+      const along = size[1 - axis];
+      const aLo = axis === 0 ? lo0 : lo1;
+      const aHi = axis === 0 ? hi0 : hi1;
+      const bLo = axis === 0 ? lo1 : lo0;
+      const bHi = axis === 0 ? hi1 : hi0;
+      for (let k = Math.ceil(aLo / across); k * across <= aHi; k++) {
+        for (let seg = Math.floor(bLo / along); seg * along <= bHi; seg++) {
+          // The two fields either side of this stretch of boundary.
+          const c0: [number, number] = axis === 0 ? [k - 1, seg] : [seg, k - 1];
+          const c1: [number, number] = axis === 0 ? [k, seg] : [seg, k];
+          if (!kept(c0[0], c0[1], rx, rz) || !kept(c1[0], c1[1], rx, rz)) continue;
+          const hk = hash01(c0[0] * 31 + c1[0] + axis * 7 + rx * 977, c0[1] * 17 + c1[1] + rz * 977, 931 + fs);
+          if (hk > share) continue;
+          const spacing = 9 + hash01(k, seg, 932 + axis) * 6;
+          for (let t = seg * along + 4; t < (seg + 1) * along - 4; t += spacing) {
+            const id = Math.round(t * 7.3) + k * 1013 + axis * 7919;
+            if (hash01(id, rx * 31 + rz, 933) > 0.72) continue;
+            // In the warped frame the boundary is a straight line; undo the
+            // warp by fixed-point iteration, then the rotation.
+            const w0 = axis === 0 ? k * across : t;
+            const w1 = axis === 0 ? t : k * across;
+            let l0 = w0;
+            let l1 = w1;
+            for (let it = 0; it < 3; it++) {
+              const n0 = w0 - Math.sin(l1 * 0.0041) * 22;
+              const n1 = w1 - Math.sin(l0 * 0.0033) * 22;
+              l0 = n0;
+              l1 = n1;
+            }
+            const jitter = (hash01(id, 5, 934) - 0.5) * 3;
+            const x = ca * l0 - sa * l1 + (axis === 0 ? ca : -sa) * jitter;
+            const z = sa * l0 + ca * l1 + (axis === 0 ? sa : ca) * jitter;
+            if (x < x0 || x >= x0 + TILE || z < z0 || z >= z0 + TILE) continue;
+            const r = district(x, z);
+            if (r[0] !== rx || r[1] !== rz) continue;
+            if (aerodromeClearing(x, z) > 0.05) continue;
+            const y = terrainHeight(x, z);
+            if (y < SEA_LEVEL + 1.5) continue;
+            const e = 8;
+            const slope = Math.max(Math.abs(terrainHeight(x + e, z) - y), Math.abs(terrainHeight(x, z + e) - y)) / e;
+            if (slope > 0.16) continue;
+            const u = behindLines(x, z);
+            if (u < 60) continue;
+            const shatter = shatterAt(u - 150);
+            const far = hash01(id, 6, 935) < 0.35;
+            if (shatter > 0.02 && hash01(id, 7, 936) < shatter) {
+              if (hash01(id, 8, 937) < 0.5) {
+                push(tile, 'dead', x, y - 0.2, z, 0.75, 0.35 + hash01(id, 9, 938) * 0.6, hash01(id, 10, 939) * 6.28, tint(x, z, 17, 0.3), far);
+              }
+              continue;
+            }
+            const size2 = 0.62 + hash01(id, 11, 940) * 0.7;
+            push(tile, 'broadleaf', x, y - 0.3, z, size2 * (0.9 + hash01(id, 12, 941) * 0.3), size2, hash01(id, 13, 942) * 6.28,
+              tint(x, z, 19, 0.36), far);
+          }
+        }
+      }
+    }
+  }
 }

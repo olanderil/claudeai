@@ -53,7 +53,7 @@ sky.material.fragmentShader = sky.material.fragmentShader.replace(
   'gl_FragColor = vec4( min( retColor, vec3( 1.0e4 ) ), 1.0 );',
 );
 const elev = THREE.MathUtils.degToRad(num('sun', 38));
-const azim = THREE.MathUtils.degToRad(num('azim', 140));
+const azim = THREE.MathUtils.degToRad(num('azim', 220));
 const sunDir = new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - elev, azim);
 u.sunPosition.value.copy(sunDir);
 
@@ -110,8 +110,15 @@ const ids: AirframeId[] = typeParam === 'all' ? ['camel', 'spad', 'dr1', 'albatr
 let x = 0;
 for (const id of ids) {
   const tb = performance.now();
+  airframeStats(id);
+  const tTemplate = performance.now() - tb;
   const rig = buildAirframe(id, q.get('livery') ?? 'standard');
   const built = performance.now() - tb;
+  const tc = performance.now();
+  const second = buildAirframe(id, q.get('livery') ?? 'standard');
+  const tClone = performance.now() - tc;
+  second.dispose();
+  console.log(`${id}: template ${tTemplate.toFixed(0)} ms, livery+instance ${(built - tTemplate).toFixed(0)} ms, cached instance ${tClone.toFixed(1)} ms`);
   const st = airframeStats(id);
   console.log(`${id}: built in ${built.toFixed(0)} ms; tris LOD0/1/2 = ${st.triangles.join('/')}; draw calls ${st.drawCalls} (+${st.cockpitDrawCalls} cockpit); size L${st.size.length.toFixed(2)} span${st.size.span.toFixed(2)} H${st.size.height.toFixed(2)}; atlas ${st.atlasScale} px/m; liveries ${LIVERIES[id].join(',')}`);
   if (ids.length > 1) { x += rig.size.span / 2 + 2; }
@@ -129,15 +136,41 @@ for (const id of ids) {
 }
 console.log(`total build ${(performance.now() - t0).toFixed(0)} ms`);
 
-// Parked height: highest point above the ground in the sit attitude.
+// Parked height: highest point above the ground in the sit attitude (near LOD, no prop).
 for (const { rig, id } of rigs) {
   rig.root.updateMatrixWorld(true);
+  const lod = rig.root.children.find((c) => c instanceof THREE.LOD) as THREE.LOD;
   const b = new THREE.Box3();
-  rig.root.traverse((o) => { if (o instanceof THREE.Mesh && o.visible && o.userData.slot !== 'disc' && o.userData.slot !== 'flash') b.expandByObject(o); });
-  if (pose === 'ground') console.log(`${id}: parked top ${b.max.y.toFixed(2)} m, lowest point ${b.min.y.toFixed(3)} m (ground 0)`);
+  let low = '';
+  lod.levels[0].object.traverse((o) => {
+    if (!(o instanceof THREE.Mesh) || o.userData.slot === 'disc' || o.userData.slot === 'flash') return;
+    if (/^(prop|disc)\d|^cockpit/.test(o.name)) return;
+    const ob = new THREE.Box3().setFromObject(o, true);
+    if (ob.min.y < 0.02) {
+      // Report where the lowest vertex is, in body space, to find the culprit.
+      const pos = o.geometry.attributes.position;
+      let best = Infinity, at = new THREE.Vector3();
+      const v = new THREE.Vector3();
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+        if (v.y < best) { best = v.y; at = v.clone(); }
+      }
+      const body = rig.root.worldToLocal(at.clone());
+      low += ` ${o.name}:${ob.min.y.toFixed(3)}@(${body.x.toFixed(2)},${body.y.toFixed(2)},${body.z.toFixed(2)})`;
+    }
+    b.union(ob);
+  });
+  if (pose === 'ground') console.log(`${id}: parked top ${b.max.y.toFixed(2)} m, lowest ${b.min.y.toFixed(3)} m;${low}`);
 }
 
 const main = rigs[Math.floor(rigs.length / 2)].rig;
+if (q.has('lod')) {
+  // Pin a level of detail to inspect the far models up close.
+  for (const { rig } of rigs) {
+    const lod = rig.root.children.find((c) => c instanceof THREE.LOD) as THREE.LOD & { pinned: number };
+    lod.pinned = num('lod', 0);
+  }
+}
 if (view === 'cockpit') main.setCockpitVisible(true);
 for (let i = 0; i < 4; i++) {
   state.time += 0.05;

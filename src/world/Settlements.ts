@@ -87,6 +87,8 @@ export interface Village {
    * the new ones deleted the sight the fields were supposed to be added to.
    */
   fields: boolean;
+  /** The one market town of the sector: bigger, denser, with a hall tower. */
+  town?: boolean;
 }
 
 export interface SettlementOptions {
@@ -106,6 +108,11 @@ export interface SettlementOptions {
   siteAllowed?: (x: number, z: number) => boolean;
   /** Veto on an airstrip site (too near the lines). */
   stripAllowed?: (x: number, z: number) => boolean;
+  /**
+   * Score for the sector's market town — the lowest-scoring ordinary village
+   * is rebuilt as one. Omitted: no town.
+   */
+  town?: (x: number, z: number) => number;
 }
 
 // -------------------------------------------------------------------- geometry
@@ -556,6 +563,16 @@ export function planSettlements(
   // --- Pass 3: houses stand on the finished ground, so the ones beside a strip
   // sit on its graded shoulder rather than hovering over the slope it replaced.
   const finished = (x: number, z: number): number => airstripHeight(x, z, sample(x, z));
+  if (opts.town) {
+    let best: Village | null = null;
+    let bestScore = Infinity;
+    for (const v of villages) {
+      if (v.fields || v.strip) continue;
+      const score = opts.town(v.x, v.z);
+      if (score < bestScore) { bestScore = score; best = v; }
+    }
+    if (best !== null && bestScore < Infinity) best.town = true;
+  }
   for (const v of villages) {
     layoutHouses(v, finished);
     addFarmland(v);
@@ -745,9 +762,11 @@ function layoutHouses(v: Village, height: (x: number, z: number) => number): voi
   v.street = street;
   const cos = Math.cos(street);
   const sin = Math.sin(street);
-  const along = 26;
-  const across = 24;
-  const target = 20 + Math.floor(rnd(12) * 15);
+  const along = v.town ? 21 : 26;
+  const across = v.town ? 20 : 24;
+  const target = v.town ? 95 : 20 + Math.floor(rnd(12) * 15);
+  const cols = v.town ? 9 : HOUSE_COLS;
+  const rows = v.town ? [-5, -4, -3, -2, -1, 1, 2, 3, 4, 5] : HOUSE_ROWS;
 
   const place = (
     lx: number, lz: number, s: number,
@@ -771,17 +790,23 @@ function layoutHouses(v: Village, height: (x: number, z: number) => number): voi
     });
   };
 
-  // The church, on the square where the street widens.
-  place(0, 0, 1, 13, 11, 13, 9 + rnd(13) * 2);
+  // The church, on the square where the street widens — in a town, the
+  // cloth hall: long, tall, and the tower the whole sector steered by.
+  if (v.town) place(0, 0, 1, 18, 48, 17, 12);
+  else place(0, 0, 1, 13, 11, 13, 9 + rnd(13) * 2);
 
   const slots: [number, number][] = [];
-  for (let i = -HOUSE_COLS; i <= HOUSE_COLS; i++) {
-    for (const j of HOUSE_ROWS) slots.push([i * along, j * across]);
+  for (let i = -cols; i <= cols; i++) {
+    for (const j of rows) {
+      // Leave the square round the hall open.
+      if (v.town && Math.abs(i) <= 1 && Math.abs(j) <= 1) continue;
+      slots.push([i * along, j * across]);
+    }
   }
 
   for (let s = 0; s < slots.length && v.houses.length < target; s++) {
     // Deterministic thinning, so a village is a cluster rather than a full block.
-    if (rnd(100 + s) > 0.8) continue;
+    if (rnd(100 + s) > (v.town ? 0.95 : 0.8)) continue;
 
     const [lx, lz] = slots[s];
     place(
@@ -833,36 +858,58 @@ function slab(w: number, h: number, d: number, x: number, y: number, z: number, 
 }
 
 /**
- * A roofless shell: four walls broken off at different heights, gaps where
- * whole stretches have come down, and a heap of fallen masonry inside.
+ * A roofless shell: four walls broken off along jagged, sloping lines, whole
+ * stretches down to the footings, a gable end sometimes still standing, and a
+ * heap of fallen masonry inside.
  *
  * Unit footprint, unit wall height; the instance stretches it to the house it
  * was. Three variants so a street of ruins is not one ruin repeated.
  */
 function ruinShell(variant: number): THREE.BufferGeometry {
   const parts: THREE.BufferGeometry[] = [];
-  const t = 0.075;
-  const r = (k: number): number => cellRandom(variant, k, 77);
-  const wall = (along: 'x' | 'z', offset: number, seed: number): void => {
-    const n = 5;
-    for (let k = 0; k < n; k++) {
-      const roll = r(seed + k);
-      // Some stretches gone to the footings, most broken off part way, the odd
-      // gable end still standing to the old roof line.
-      const h = roll < 0.18 ? 0.08 : roll > 0.9 ? 1.25 : 0.3 + r(seed + k + 40) * 0.7;
-      const len = 1 / n;
-      const c = -0.5 + len * (k + 0.5);
-      if (along === 'x') parts.push(slab(len * 1.02, h, t, c, 0, offset));
-      else parts.push(slab(t, h, len * 1.02, offset, 0, c));
+  const t = 0.07;
+  const r = (k: number): number => cellRandom(variant * 131, k, 77);
+  const wall = (side: number, seed: number, gableEnd: boolean): void => {
+    // The broken top, as a random walk: mostly gentle slopes, the odd sheer
+    // drop where a shell took a bite, and on a gable end perhaps the old peak.
+    const n = 9;
+    const pts: [number, number][] = [];
+    let h = 0.35 + r(seed) * 0.6;
+    for (let k = 0; k <= n; k++) {
+      const roll = r(seed + k * 3 + 1);
+      if (roll < 0.14) h = 0.04 + r(seed + k * 3 + 2) * 0.12;
+      else if (roll > 0.86) h = 0.7 + r(seed + k * 3 + 2) * 0.35;
+      else h = Math.max(0.05, Math.min(1.0, h + (r(seed + k * 3 + 2) - 0.5) * 0.45));
+      let top = h;
+      if (gableEnd && k > 2 && k < n - 2 && r(seed + 90) > 0.45) top = Math.max(h, 1 + 0.55 * (1 - Math.abs(k / n - 0.5) * 2));
+      pts.push([-0.5 + k / n, top]);
     }
+    const shape = new THREE.Shape();
+    shape.moveTo(-0.5, 0);
+    shape.lineTo(0.5, 0);
+    for (let k = pts.length - 1; k >= 0; k--) shape.lineTo(pts[k][0], pts[k][1]);
+    shape.closePath();
+    const g = new THREE.ExtrudeGeometry(shape, { depth: t, bevelEnabled: false });
+    g.translate(0, 0, -t / 2);
+    if (side === 1) g.translate(0, 0, 0.5 - t / 2);
+    if (side === 2) g.translate(0, 0, -0.5 + t / 2);
+    if (side === 3) { g.rotateY(Math.PI / 2); g.translate(0.5 - t / 2, 0, 0); }
+    if (side === 4) { g.rotateY(Math.PI / 2); g.translate(-0.5 + t / 2, 0, 0); }
+    const flat = g.toNonIndexed();
+    g.dispose();
+    flat.deleteAttribute('uv');
+    parts.push(flat);
   };
-  wall('x', -0.5 + t / 2, 0);
-  wall('x', 0.5 - t / 2, 10);
-  wall('z', -0.5 + t / 2, 20);
-  wall('z', 0.5 - t / 2, 30);
+  wall(1, 0, false);
+  wall(2, 40, false);
+  wall(3, 80, true);
+  wall(4, 120, r(5) > 0.5);
   // Fallen roof and masonry inside.
-  parts.push(slab(0.62, 0.16, 0.5, (r(50) - 0.5) * 0.2, 0, (r(51) - 0.5) * 0.2));
-  parts.push(slab(0.3, 0.1, 0.34, (r(52) - 0.5) * 0.4, 0.14, (r(53) - 0.5) * 0.4));
+  for (const [w, hh, d, x, z] of [[0.62, 0.16, 0.5, (r(50) - 0.5) * 0.2, (r(51) - 0.5) * 0.2], [0.3, 0.1, 0.34, (r(52) - 0.5) * 0.4, (r(53) - 0.5) * 0.4]]) {
+    const b = slab(w, hh, d, x, 0, z);
+    b.deleteAttribute('uv');
+    parts.push(b);
+  }
   return mergeGeometries(parts, false);
 }
 
@@ -909,7 +956,7 @@ function towerGeometry(): THREE.BufferGeometry {
 
 /** What shellfire leaves of a tower: a stump with a broken, stepped top. */
 function towerStump(): THREE.BufferGeometry {
-  const stone = new THREE.Color(0.55, 0.52, 0.47);
+  const stone = new THREE.Color(0.30, 0.27, 0.23);
   const parts: THREE.BufferGeometry[] = [slab(5.6, 5, 5.6, 0, 0, 0, stone)];
   const heights = [9.5, 6.5, 12.5, 7.5];
   const offs: [number, number][] = [[-1.4, -1.4], [1.4, -1.4], [-1.4, 1.4], [1.4, 1.4]];
@@ -933,7 +980,11 @@ function instanced(
 export interface SettlementMeshOptions {
   /** Flat-roofed houses (the Levant): a low slab rather than a pitched roof. */
   flatRoofs?: boolean;
+  /** How much of the building is red brick rather than stone or render, 0..1. */
+  brick?: number;
 }
+
+const BRICKS = [0x7a4032, 0x8a4b38, 0x6e3a2e, 0x946049, 0x7d5343];
 
 /**
  * Build every village in the current plan into one group: intact houses and
@@ -959,6 +1010,15 @@ export function buildSettlementMeshes(
   const dust = new THREE.Color().setRGB(...groundTone, THREE.LinearSRGBColorSpace);
   const ash = new THREE.Color(0.30, 0.28, 0.25);
   const dummy = new THREE.Object3D();
+
+  // Brick country: Flanders and Artois were built of it.
+  const brick = opts.brick ?? 0;
+  if (brick > 0) {
+    for (const { h } of all) {
+      const roll = cellRandom(Math.round(h.x), Math.round(h.z), 21);
+      if (roll < brick) h.wall = new THREE.Color(BRICKS[Math.floor(cellRandom(Math.round(h.x), Math.round(h.z), 22) * BRICKS.length)]);
+    }
+  }
 
   const intact = all.filter((e) => e.h.state === 'intact');
   const ruins = all.filter((e) => e.h.state === 'ruin');
@@ -988,11 +1048,11 @@ export function buildSettlementMeshes(
     const churches = intact.filter((e) => e.h.church && !opts.flatRoofs);
     if (churches.length > 0) {
       const towers = instanced(towerGeometry(), towerMat, churches.length);
-      churches.forEach(({ h }, i) => {
-        const back = h.depth / 2 + 2.6;
+      churches.forEach(({ h, v }, i) => {
+        const back = v.town ? 0 : h.depth / 2 + 2.6;
         dummy.position.set(h.x - Math.sin(h.rotation) * back, h.y - 0.5, h.z - Math.cos(h.rotation) * back);
         dummy.rotation.set(0, h.rotation, 0);
-        dummy.scale.set(1, 1, 1);
+        dummy.scale.set(v.town ? 1.9 : 1, v.town ? 2.1 : 1, v.town ? 1.9 : 1);
         dummy.updateMatrix();
         towers.setMatrixAt(i, dummy.matrix);
       });
@@ -1012,7 +1072,7 @@ export function buildSettlementMeshes(
         dummy.updateMatrix();
         mesh.setMatrixAt(i, dummy.matrix);
         // Scorched and dusted: the wall colour pushed toward ash and dirt.
-        const c = h.wall.clone().lerp(ash, 0.45).lerp(dust, 0.12).multiplyScalar(0.82);
+        const c = h.wall.clone().lerp(ash, 0.55).lerp(dust, 0.15).multiplyScalar(0.62);
         mesh.setColorAt(i, c);
       });
       group.add(mesh);
@@ -1020,11 +1080,12 @@ export function buildSettlementMeshes(
     const stumps = ruins.filter((e) => e.h.church);
     if (stumps.length > 0 && !opts.flatRoofs) {
       const mesh = instanced(towerStump(), towerMat, stumps.length);
-      stumps.forEach(({ h }, i) => {
-        const back = h.depth / 2 + 2.6;
+      stumps.forEach(({ h, v }, i) => {
+        const back = v.town ? 0 : h.depth / 2 + 2.6;
         dummy.position.set(h.x - Math.sin(h.rotation) * back, h.y - 0.5, h.z - Math.cos(h.rotation) * back);
         dummy.rotation.set(0, h.rotation, 0);
-        dummy.scale.set(1, 0.85 + cellRandom(Math.round(h.x), Math.round(h.z), 3) * 0.4, 1);
+        const k = v.town ? 1.9 : 1;
+        dummy.scale.set(k, (0.85 + cellRandom(Math.round(h.x), Math.round(h.z), 3) * 0.4) * (v.town ? 2.4 : 1), k);
         dummy.updateMatrix();
         mesh.setMatrixAt(i, dummy.matrix);
       });
@@ -1046,7 +1107,7 @@ export function buildSettlementMeshes(
       dummy.scale.set(h.width * k, (spill ? 2.2 : 3.4 + h.height * 0.2) * (h.church ? 1.4 : 1), h.depth * k);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
-      const c = h.wall.clone().lerp(ash, 0.5).lerp(dust, 0.3).multiplyScalar(0.78);
+      const c = h.wall.clone().lerp(ash, 0.5).lerp(dust, 0.35).multiplyScalar(0.6);
       mesh.setColorAt(i, c);
     });
     group.add(mesh);

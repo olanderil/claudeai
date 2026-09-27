@@ -236,7 +236,7 @@ export function buildFuselage(fus: Fuselage, sp: FusSpec, tubCol: RGB): FusOut {
   for (const key of sp.keys) zs.add(key.z);
   const openings = sp.openings ?? [];
   for (const o of openings) {
-    for (let z = o.z0 - 0.12; z <= o.z1 + 0.12; z += Math.min(sp.dz, 0.05)) zs.add(z);
+    for (let z = o.z0 - 0.22; z <= o.z1 + 0.12; z += Math.min(sp.dz, 0.05)) zs.add(z);
     zs.add(o.z0); zs.add(o.z1);
   }
   const Z = [...zs].filter((z) => z >= fus.z0 && z <= fus.z1).sort((a, b) => a - b).filter((z, i, a) => i === 0 || z - a[i - 1] > 0.004);
@@ -349,7 +349,9 @@ export function buildFuselage(fus: Fuselage, sp: FusSpec, tubCol: RGB): FusOut {
   const rims: V3[][] = [];
   for (const o of openings) {
     const tub = new Geo();
-    const ks = Z.findIndex((z) => z >= o.z0 - 0.1);
+    // The front bulkhead sits well ahead of the opening so the instrument
+    // board (just inside the opening) is in front of it.
+    const ks = Z.findIndex((z) => z >= o.z0 - 0.2);
     let ke = K - 1;
     for (let k = K - 1; k >= 0; k--) if (Z[k] <= o.z1 + 0.1) { ke = k; break; }
     const inset = 0.012;
@@ -383,7 +385,8 @@ export function buildFuselage(fus: Fuselage, sp: FusSpec, tubCol: RGB): FusOut {
     const path: V3[] = [];
     const zc = (o.z0 + o.z1) / 2, a = (o.z1 - o.z0) / 2;
     for (let q = 0; q <= 48; q++) {
-      const t = (q / 48) * Math.PI * 2;
+      // Start and end at the back, where the seam of the tube hides behind the pilot.
+      const t = Math.PI + (q / 48) * Math.PI * 2;
       const x = Math.sin(t) * o.hw, z = zc - Math.cos(t) * a;
       path.push(new THREE.Vector3(x, fus.topAt(z, x) + 0.004, z));
     }

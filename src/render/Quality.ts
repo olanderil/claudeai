@@ -24,6 +24,8 @@ export interface QualityPreset {
   depthOfField: boolean;
   grain: number;
   vignette: number;
+  /** Density of the 3D trees, 0..1 of the full scatter (optional: 1). */
+  trees?: number;
 }
 
 export const QUALITY_PRESETS: QualityPreset[] = [
@@ -41,6 +43,7 @@ export const QUALITY_PRESETS: QualityPreset[] = [
     depthOfField: false,
     grain: 0,
     vignette: 0.2,
+    trees: 0.35,
   },
   {
     name: 'MEDIUM',
@@ -56,6 +59,7 @@ export const QUALITY_PRESETS: QualityPreset[] = [
     depthOfField: true,
     grain: 0.02,
     vignette: 0.3,
+    trees: 0.65,
   },
   {
     name: 'HIGH',

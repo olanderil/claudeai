@@ -27,7 +27,7 @@ const DEF = {
   dials: { x: 0, y: 0, w: 512, h: 256, rough: 0.5, metal: 0 },
   wood: { x: 512, y: 0, w: 256, h: 256, rough: 0.36, metal: 0 },
   lam: { x: 768, y: 0, w: 256, h: 256, rough: 0.28, metal: 0 },
-  perf: { x: 0, y: 256, w: 256, h: 256, rough: 0.42, metal: 0.8 },
+  perf: { x: 0, y: 256, w: 256, h: 256, rough: 0.48, metal: 0.6 },
   leather: { x: 256, y: 256, w: 256, h: 256, rough: 0.58, metal: 0 },
   radiator: { x: 512, y: 256, w: 256, h: 256, rough: 0.45, metal: 0.75 },
   fins: { x: 768, y: 256, w: 256, h: 256, rough: 0.5, metal: 0.8 },
@@ -41,7 +41,7 @@ const DEF = {
   alu: { x: 896, y: 512, w: 128, h: 128, rough: 0.28, metal: 1 },
   louvre: { x: 0, y: 640, w: 256, h: 128, rough: 0.45, metal: 0 },
   brass: { x: 256, y: 640, w: 128, h: 128, rough: 0.28, metal: 1 },
-  gun: { x: 384, y: 640, w: 128, h: 128, rough: 0.4, metal: 0.85 },
+  gun: { x: 384, y: 640, w: 128, h: 128, rough: 0.6, metal: 0.45 },
   paint: { x: 512, y: 640, w: 128, h: 128, rough: 0.42, metal: 0 },
   fur: { x: 640, y: 640, w: 128, h: 128, rough: 0.9, metal: 0 },
   lens: { x: 768, y: 640, w: 128, h: 128, rough: 0.08, metal: 0.3 },
@@ -119,10 +119,10 @@ export function propTextures(): PropTextures {
     const n = 9;
     for (let k = 0; k < n; k++) {
       const x0 = d.x + (k * d.w) / n;
-      ctx.fillStyle = k % 2 === 0 ? '#b98258' : '#7b4629';
+      ctx.fillStyle = k % 2 === 0 ? '#8a5a38' : '#6a3f26';
       ctx.fillRect(x0, d.y, d.w / n + 1, d.h);
-      ctx.fillStyle = 'rgba(40,20,10,0.55)';
-      ctx.fillRect(x0, d.y, 1.2, d.h);
+      ctx.fillStyle = 'rgba(30,14,6,0.6)';
+      ctx.fillRect(x0, d.y, 1.0, d.h);
     }
     px(d, (x, y) => (vnoise(x * 0.4, y * 0.03, 11) - 0.5) * 0.0003,
       (x, y) => 0.86 + 0.14 * fbm(x * 0.3 + Math.sin(y * 0.02) * 3, y * 0.012, 3, 21));
@@ -179,7 +179,7 @@ export function propTextures(): PropTextures {
     const gx = x / s + (row % 2) * 0.5;
     const fx = (gx % 1) - 0.5, fy = (gy % 1) - 0.5;
     const e = Math.max(Math.abs(fx), Math.abs(fy) * 1.15);
-    return e > 0.4 ? 0.95 : 0.18 + 0.1 * vnoise(x * 0.3, y * 0.3, 7);
+    return e > 0.4 ? 0.62 : 0.12 + 0.08 * vnoise(x * 0.3, y * 0.3, 7);
   });
 
   // Cooling fins: ridges along v.
@@ -214,8 +214,9 @@ export function propTextures(): PropTextures {
     const t = ((y / DEF.louvre.h) * 8) % 1;
     return t < 0.25 ? 0.15 : 1;
   });
-  px(DEF.ply, (x, y) => (vnoise(x * 0.5, y * 0.03, 61) - 0.5) * 0.0002,
-    (x, y) => 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(y * 0.2 + fbm(x * 0.01, y * 0.03, 3, 62) * 14)));
+  // Birch-faced plywood: fine, even figure, a few darker growth lines.
+  px(DEF.ply, (x, y) => (vnoise(x * 0.9, y * 0.04, 61) - 0.5) * 0.00015,
+    (x, y) => 0.8 + 0.1 * Math.sin(x * 0.9 + fbm(x * 0.03, y * 0.01, 3, 62) * 10) + 0.1 * vnoise(x * 1.5, y * 0.05, 63));
   px(DEF.interior, (x, y) => {
     // Fabric inside a frame: vertical longeron shadows every so often.
     const u = x / DEF.interior.w;
@@ -289,17 +290,17 @@ function paintDials(ctx: CanvasRenderingContext2D): void {
     switch (kind) {
       case 'rpm':
         ticks(-2.4, 2.4, 20, ['0', '4', '8', '12', '16'], 5);
-        ctx.fillText('R.P.M.', 0, 22); ctx.fillText('x100', 0, 33);
+        ctx.font = 'bold 8px sans-serif'; ctx.fillText('R.P.M.', 0, 26); ctx.fillText('x100', 0, 36);
         needle(1.3);
         break;
       case 'alt':
         ticks(0, Math.PI * 2 - 0.3, 20, ['0', '5', '10', '15', ''], 5);
-        ctx.fillText('FEET', 0, 20); ctx.fillText('x1000', 0, 31);
+        ctx.font = 'bold 8px sans-serif'; ctx.fillText('FEET', 0, 22); ctx.fillText('x1000', 0, 32);
         needle(0.9);
         break;
       case 'asi':
         ticks(-2.3, 2.3, 24, ['40', '', '80', '', '120'], 6);
-        ctx.fillText('M.P.H.', 0, 24);
+        ctx.font = 'bold 8px sans-serif'; ctx.fillText('M.P.H.', 0, 28);
         needle(0.4);
         break;
       case 'compass': {
@@ -375,7 +376,7 @@ export function propBlurTexture(): THREE.Texture {
     if (r > 0.86) {
       // Brass tipping reads as a ring.
       const tip = Math.min(1, (r - 0.86) / 0.03) * Math.min(1, (1 - r) / 0.03);
-      alpha = Math.max(alpha, 0.24 * tip * streak);
+      alpha = Math.max(alpha, 0.15 * tip * streak);
       cr = 0.75; cg = 0.58; cb = 0.3;
     }
     img.data[o] = cr * 255;
@@ -410,9 +411,10 @@ export function flashTexture(): THREE.Texture {
     }
     v = Math.min(1, v);
     const o = (y * S + x) * 4;
+    // White-hot core, orange at the fringes.
     img.data[o] = 255;
-    img.data[o + 1] = Math.min(255, 150 + 105 * v);
-    img.data[o + 2] = Math.min(255, 60 + 170 * v * v);
+    img.data[o + 1] = Math.min(255, 110 + 145 * v * v);
+    img.data[o + 2] = Math.min(255, 30 + 200 * v * v * v);
     img.data[o + 3] = v * 255;
   }
   ctx.putImageData(img, 0, 0);

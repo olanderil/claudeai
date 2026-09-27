@@ -52,7 +52,7 @@ export class Painter {
     this.ctx.fillStyle = '#808080';
     this.ctx.fillRect(0, 0, atlas.size, atlas.size);
     // Default: fabric, rough, not metal.
-    this.orm.fillStyle = 'rgb(255,158,0)';
+    this.orm.fillStyle = 'rgb(255,186,0)';
     this.orm.fillRect(0, 0, atlas.size / 2, atlas.size / 2);
   }
 
@@ -200,12 +200,13 @@ export function text(
 // ---------------------------------------------------------------- camouflage
 
 /**
- * French five-colour: big soft-edged blobs. Segment smooth noise fields by
- * argmax — organic shapes that tile nothing and never look like polka dots.
- * Painted at a coarse grid and scaled up with smoothing: real edges were
- * sprayed/brushed and soft anyway.
+ * French five-colour: large, irregular, soft-edged patches. Each colour owns
+ * a domain-warped noise field and a pixel takes the strongest — organic
+ * shapes that never repeat and never look like polka dots. `weights` bias a
+ * colour's share (black was used sparingly). Painted on a coarse grid and
+ * scaled up with smoothing: the real edges were brushed and soft anyway.
  */
-export function blobCamo(p: Painter, name: string, palette: string[], scale: number, seed: number): void {
+export function blobCamo(p: Painter, name: string, palette: string[], scale: number, seed: number, weights?: number[]): void {
   const r = p.region(name);
   if (!r) return;
   const res = 40; // px per metre for the coarse field
@@ -214,10 +215,13 @@ export function blobCamo(p: Painter, name: string, palette: string[], scale: num
   const img = ctx.createImageData(w, h);
   const cols = palette.map(hexToRgb);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const u = (r.u0 - 0.1 + x / res) / scale, v = (r.v0 - 0.1 + y / res) / scale;
+    let u = (r.u0 - 0.1 + x / res) / scale, v = (r.v0 - 0.1 + y / res) / scale;
+    // Domain warp: bends the patch outlines into ragged, elongated shapes.
+    const wu = fbm(u * 0.7, v * 0.7, 2, seed + 500) - 0.5, wv = fbm(u * 0.7 + 9.2, v * 0.7, 2, seed + 600) - 0.5;
+    u += wu * 1.4; v += wv * 1.4;
     let best = -1, bi = 0;
     for (let k = 0; k < cols.length; k++) {
-      const n = fbm(u + k * 13.1, v - k * 7.3, 3, seed + k * 101) + (k === 0 ? 0.03 : 0);
+      const n = fbm(u + k * 13.1, v - k * 7.3, 2, seed + k * 101) * (weights?.[k] ?? 1);
       if (n > best) { best = n; bi = k; }
     }
     const o = (y * w + x) * 4;
@@ -231,105 +235,85 @@ export function blobCamo(p: Painter, name: string, palette: string[], scale: num
 }
 
 /**
- * Printed lozenge fabric: irregular polygons from a jittered hexagonal grid,
- * coloured so neighbours differ, repeating across the bolt. Laid chordwise in
- * strips like the real fabric, which was supplied in ~1.3 m rolls.
+ * Printed lozenge fabric: irregular hexagons, the dual cells of a jittered
+ * triangular lattice, coloured so no two neighbours match. The lattice is
+ * periodic (a printed bolt repeats) and can be laid at an angle, as the
+ * fabric strips were on many types.
  */
-export function lozenge(p: Painter, name: string, palette: string[], seed: number, o: { cell?: number; angle?: number; tape?: string } = {}): void {
+export function lozenge(p: Painter, name: string, palette: string[], seed: number, o: { cell?: number; angle?: number } = {}): void {
   const r = p.region(name);
   if (!r) return;
   const cell = o.cell ?? 0.2;
   const R = rng(seed);
-  // Pattern tile: a jittered hex lattice, 8 × 10 cells, drawn as polygons.
-  const nx = 8, ny = 10;
-  const tw = nx * cell, th = ny * cell * 0.866;
-  const pts: [number, number][][] = [];
-  for (let j = 0; j <= ny; j++) {
-    const row: [number, number][] = [];
-    for (let i = 0; i <= nx; i++) {
-      row.push([(i + (j % 2) * 0.5) * cell + (R() - 0.5) * cell * 0.55, j * cell * 0.866 + (R() - 0.5) * cell * 0.5]);
-    }
-    pts.push(row);
-  }
-  // Make the tile periodic: last row/column copy the first shifted.
-  for (let j = 0; j <= ny; j++) pts[j][nx] = [pts[j][0][0] + tw, pts[j][0][1]];
-  for (let i = 0; i <= nx; i++) pts[ny][i] = [pts[0][i][0], pts[0][i][1] + th];
-  const colourOf = new Map<string, number>();
-  const pick = (i: number, j: number): number => {
-    const key = `${((i % nx) + nx) % nx},${((j % ny) + ny) % ny}`;
-    let c = colourOf.get(key);
-    if (c === undefined) {
-      const avoid = new Set<number>();
-      for (const [di, dj] of [[-1, 0], [0, -1], [1, -1], [-1, -1]]) {
-        const k2 = `${(((i + di) % nx) + nx) % nx},${(((j + dj) % ny) + ny) % ny}`;
-        const cc = colourOf.get(k2);
-        if (cc !== undefined) avoid.add(cc);
-      }
-      const opts = palette.map((_, k) => k).filter((k) => !avoid.has(k));
-      c = opts[Math.floor(R() * opts.length)] ?? 0;
-      colourOf.set(key, c);
-    }
-    return c;
+  const NX = 9, NY = 10; // tile size in lattice points (NY even keeps row parity periodic)
+  const jit: [number, number][] = Array.from({ length: NX * NY }, () => [(R() - 0.5) * 0.42, (R() - 0.5) * 0.42]);
+  const mod = (a: number, n: number): number => ((a % n) + n) % n;
+  const pt = (i: number, j: number): [number, number] => {
+    const q = jit[mod(j, NY) * NX + mod(i, NX)];
+    return [(i + (mod(j, 2) ? 0.5 : 0) + q[0]) * cell, (j + q[1]) * cell * 0.866];
   };
+  const nbrs = (i: number, j: number): [number, number][] => mod(j, 2)
+    ? [[i + 1, j], [i + 1, j + 1], [i, j + 1], [i - 1, j], [i, j - 1], [i + 1, j - 1]]
+    : [[i + 1, j], [i, j + 1], [i - 1, j + 1], [i - 1, j], [i - 1, j - 1], [i, j - 1]];
+  // Colour the periodic tile so neighbours differ.
+  const col = new Int32Array(NX * NY).fill(-1);
+  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+    const used = new Set<number>();
+    for (const [a, b] of nbrs(i, j)) { const c = col[mod(b, NY) * NX + mod(a, NX)]; if (c >= 0) used.add(c); }
+    const opts = palette.map((_, k) => k).filter((k) => !used.has(k));
+    col[j * NX + i] = opts.length ? opts[Math.floor(R() * opts.length)] : Math.floor(R() * palette.length);
+  }
   p.on(r, (ctx) => {
     ctx.save();
-    ctx.rotate(o.angle ?? 0);
-    const span = Math.hypot(r.u1 - r.u0, r.v1 - r.v0) + 2;
     const cu = (r.u0 + r.u1) / 2, cv = (r.v0 + r.v1) / 2;
-    const i0 = Math.floor((cu - span) / tw) - 1, i1 = Math.ceil((cu + span) / tw) + 1;
-    const j0 = Math.floor((cv - span) / th) - 1, j1 = Math.ceil((cv + span) / th) + 1;
-    for (let ti = i0; ti <= i1; ti++) for (let tj = j0; tj <= j1; tj++) {
-      const ox = ti * tw, oy = tj * th;
-      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-        // Each cell is the hexagon-ish polygon around lattice point (i, j): use the quad of 4 neighbours split in two.
-        const a = pts[j][i], b = pts[j][i + 1], c = pts[j + 1][i + 1], d = pts[j + 1][i];
-        const col = palette[pick(i, j)];
-        ctx.fillStyle = col;
-        ctx.beginPath();
-        if (j % 2 === 0) {
-          ctx.moveTo(ox + a[0], oy + a[1]); ctx.lineTo(ox + b[0], oy + b[1]); ctx.lineTo(ox + d[0], oy + d[1]);
-        } else {
-          ctx.moveTo(ox + a[0], oy + a[1]); ctx.lineTo(ox + b[0], oy + b[1]); ctx.lineTo(ox + c[0], oy + c[1]);
-        }
-        ctx.closePath();
-        ctx.fill();
-        ctx.fillStyle = palette[pick(i + 7, j + 3)];
-        ctx.beginPath();
-        if (j % 2 === 0) {
-          ctx.moveTo(ox + b[0], oy + b[1]); ctx.lineTo(ox + c[0], oy + c[1]); ctx.lineTo(ox + d[0], oy + d[1]);
-        } else {
-          ctx.moveTo(ox + a[0], oy + a[1]); ctx.lineTo(ox + c[0], oy + c[1]); ctx.lineTo(ox + d[0], oy + d[1]);
-        }
-        ctx.closePath();
-        ctx.fill();
+    ctx.translate(cu, cv);
+    ctx.rotate(o.angle ?? 0);
+    const span = Math.hypot(r.u1 - r.u0, r.v1 - r.v0) / 2 + cell * 2;
+    const i0 = Math.floor(-span / cell) - 1, i1 = Math.ceil(span / cell) + 1;
+    const j0 = Math.floor(-span / (cell * 0.866)) - 1, j1 = Math.ceil(span / (cell * 0.866)) + 1;
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const [px, py] = pt(i, j);
+      const ns = nbrs(i, j).map(([a, b]) => pt(a, b));
+      ctx.fillStyle = palette[col[mod(j, NY) * NX + mod(i, NX)]];
+      ctx.beginPath();
+      for (let k = 0; k < 6; k++) {
+        const a = ns[k], b = ns[(k + 1) % 6];
+        const x = (px + a[0] + b[0]) / 3, y = (py + a[1] + b[1]) / 3;
+        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
+      ctx.closePath();
+      ctx.fill();
+      // Hairline overlap so no background shows between cells.
+      ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 0.004; ctx.stroke();
     }
     ctx.restore();
   });
 }
 
-/** Fokker's factory finish: olive streaks brushed diagonally over clear dope. */
+/**
+ * Fokker's factory finish: olive-green brushed on in long diagonal strokes
+ * over clear dope, so the colour is dark olive with lighter streaks where the
+ * brush ran thin.
+ */
 export function streaky(p: Painter, name: string, base: string, streak: string, seed: number, angle: number): void {
   const r = p.region(name);
   if (!r) return;
   const R = rng(seed);
   p.on(r, (ctx) => {
-    ctx.fillStyle = base;
+    ctx.fillStyle = streak;
     ctx.fillRect(r.u0 - 1, r.v0 - 1, r.u1 - r.u0 + 2, r.v1 - r.v0 + 2);
     ctx.save();
     ctx.translate((r.u0 + r.u1) / 2, (r.v0 + r.v1) / 2);
     ctx.rotate(angle);
-    const L = Math.hypot(r.u1 - r.u0, r.v1 - r.v0) / 2 + 0.5;
-    ctx.fillStyle = streak;
-    ctx.globalAlpha = 0.85;
-    ctx.fillRect(-L, -L, 2 * L, 2 * L);
-    // Brush strokes: long thin bands of lighter and darker.
-    for (let k = 0; k < L * 260; k++) {
-      const y = -L + R() * 2 * L, x = -L + R() * 2 * L;
-      const len = 0.3 + R() * 1.4, w = 0.006 + R() * 0.02;
-      ctx.globalAlpha = 0.12 + R() * 0.25;
-      ctx.fillStyle = R() < 0.5 ? base : '#2b301a';
-      ctx.fillRect(x, y, len, w);
+    const L = Math.hypot(r.u1 - r.u0, r.v1 - r.v0) / 2 + 0.6;
+    const n = Math.floor(L * L * 90);
+    for (let k = 0; k < n; k++) {
+      const y = -L + R() * 2 * L, x = -L - 1 + R() * (2 * L + 1);
+      const len = 0.6 + R() * 1.8, w = 0.012 + R() * 0.035;
+      const light = R() < 0.55;
+      ctx.globalAlpha = light ? 0.07 + R() * 0.16 : 0.08 + R() * 0.18;
+      ctx.fillStyle = light ? base : '#262a16';
+      ctx.fillRect(x, y + (R() - 0.5) * 0.01, len, w);
     }
     ctx.restore();
   });
@@ -378,7 +362,7 @@ export function soot(p: Painter, name: string, x: number, y: number, rx: number,
 }
 
 /** Paint chipped off an edge band [v0, v1] of a region, showing bare metal. */
-export function chips(p: Painter, name: string, u0: number, u1: number, v0: number, v1: number, density: number, seed: number, metal = '#b8b6ae'): void {
+export function chips(p: Painter, name: string, u0: number, u1: number, v0: number, v1: number, density: number, seed: number, metal = '#77756f'): void {
   const R = rng(seed);
   p.on(name, (ctx) => {
     const area = (u1 - u0) * (v1 - v0);
@@ -386,7 +370,7 @@ export function chips(p: Painter, name: string, u0: number, u1: number, v0: numb
     ctx.fillStyle = metal;
     for (let k = 0; k < n; k++) {
       const x = u0 + R() * (u1 - u0), y = v0 + R() * (v1 - v0);
-      const s = 0.003 + R() ** 3 * 0.02;
+      const s = 0.002 + R() ** 3 * 0.012;
       ctx.beginPath();
       for (let q = 0; q < 6; q++) {
         const a = (q / 6) * Math.PI * 2, rr = s * (0.5 + R());
@@ -403,7 +387,7 @@ export function chips(p: Painter, name: string, u0: number, u1: number, v0: numb
     ctx.fillStyle = 'rgb(255,90,230)';
     for (let k = 0; k < n; k++) {
       const x = u0 + R2() * (u1 - u0), y = v0 + R2() * (v1 - v0);
-      const s = 0.003 + R2() ** 3 * 0.02;
+      const s = 0.002 + R2() ** 3 * 0.012;
       ctx.beginPath(); ctx.arc(x, y, s * 0.9, 0, Math.PI * 2); ctx.fill();
     }
   });
@@ -426,6 +410,12 @@ export function mud(p: Painter, name: string, x0: number, x1: number, y0: number
 /** Darken a patch (hand-holds, boots on the wing root). */
 export function smudge(p: Painter, name: string, x: number, y: number, rx: number, ry: number, alpha = 0.25): void {
   soot(p, name, x, y, rx, ry, alpha, '35,28,20');
+}
+
+/** Region-metre rectangle [u, v, w, h] covering fuselage stations zA..zB on one side. */
+export function fusRect(fus: Fuselage, side: 'R' | 'L', zA: number, zB: number): [number, number, number, number] {
+  const u0 = side === 'R' ? fus.z1 - zB : zA - fus.z0;
+  return [u0, -0.1, zB - zA, 4];
 }
 
 export function hexToRgb(hex: string): [number, number, number] {
@@ -469,7 +459,7 @@ export function reliefNormalMap(atlas: SkinAtlas): THREE.Texture {
   const H = new Float32Array(S * S);
   for (const r of atlas.regions.values()) {
     const m = r.meta as Partial<WingMeta & FusMeta>;
-    if ((r.kind === 'wing' || r.kind === 'tail') && m.ribs) {
+    if ((r.kind === 'wing' || r.kind === 'tail') && m.ribs && m.ribs.length > 1) {
       const wm = m as WingMeta;
       const ribs = wm.ribs;
       const tape = (wm.tapeW ?? 0.035) / 2;
@@ -487,12 +477,12 @@ export function reliefNormalMap(atlas: SkinAtlas): THREE.Texture {
         const f = bay > 0.01 ? Math.min(1, Math.max(0, (s - a) / bay)) : 0;
         const sheet = wm.leSheet(s);
         const env = smooth(sheet - 0.02, sheet + 0.12, x) * (1 - 0.6 * smooth(0.9, 1.0, t));
-        h -= 0.0011 * Math.sin(Math.PI * f) ** 2 * env * (0.6 + 0.8 * t);
+        h -= 0.0026 * Math.sin(Math.PI * f) ** 2 * env * (0.6 + 0.8 * t);
         const d = Math.min(Math.abs(s - a), Math.abs(s - b));
         const pink = 0.0015 * Math.sin(x * 900);
-        if (d < tape + pink && x > sheet - 0.01) h += 0.00035 * (1 - smooth(tape * 0.7, tape, d));
+        if (d < tape + pink && x > sheet - 0.01) h += 0.0006 * (1 - smooth(tape * 0.75, tape, d));
         // Stitching under the tape.
-        if (d < 0.004 && Math.sin(x * 140) > 0.6 && x > sheet) h += 0.00025;
+        if (d < 0.005 && Math.sin(x * 140) > 0.55 && x > sheet) h += 0.0004;
         // Leading-edge sheet: a step where it ends.
         if (x < sheet) h += 0.0004;
         // Trailing-edge wire.
@@ -526,7 +516,7 @@ export function reliefNormalMap(atlas: SkinAtlas): THREE.Texture {
             let k = 0;
             while (k < arcs.length - 1 && arcs[k + 1] < v) k++;
             const f = (v - arcs[k]) / (arcs[k + 1] - arcs[k]);
-            h -= 0.0009 * Math.sin(Math.PI * f) ** 2;
+            h -= 0.0018 * Math.sin(Math.PI * f) ** 2;
           }
           if (Math.abs(v - info.sh) < 0.01) h += 0.0006;
           if (Math.abs(v - info.girth) < 0.02 && Math.sin(z * 80) > 0.2) h += 0.0005; // belly lacing
@@ -558,7 +548,7 @@ export function reliefNormalMap(atlas: SkinAtlas): THREE.Texture {
       });
     }
   }
-  return canvasTexture(heightToNormal(H, S, S, atlas.scale, 1), false);
+  return canvasTexture(heightToNormal(H, S, S, atlas.scale, 2.2), false);
 }
 
 function smooth(a: number, b: number, x: number): number {
