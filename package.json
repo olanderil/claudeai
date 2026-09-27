@@ -15,7 +15,8 @@
     "check:orbit": "esbuild tools/orbit.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/orbit.mjs --log-level=warning && node node_modules/.cache/orbit.mjs",
     "check:sky": "esbuild tools/sky.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sky.mjs --log-level=warning && node node_modules/.cache/sky.mjs",
     "check:daylight": "esbuild tools/daylight.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/daylight.mjs --log-level=warning && node node_modules/.cache/daylight.mjs",
-    "check:combat": "esbuild tools/combat.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/combat.mjs --log-level=warning && node node_modules/.cache/combat.mjs"
+    "check:combat": "esbuild tools/combat.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/combat.mjs --log-level=warning && node node_modules/.cache/combat.mjs",
+    "check:combatcam": "esbuild tools/combatcam.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/combatcam.mjs --log-level=warning && node node_modules/.cache/combatcam.mjs"
   },
   "dependencies": {
     "three": "^0.169.0"

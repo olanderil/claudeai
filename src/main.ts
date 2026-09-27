@@ -1045,9 +1045,9 @@ function boot(): void {
   const game = new Game({
     notify: (t, s, sec) => notify(t, s, sec),
     cue: (k) => sfx.ui(k),
-    killCam: (s) => {
-      if (rig.mode === 'cinematic') rig.requestKillCam({ position: s.position, velocity: s.velocity }, 3.2);
-    },
+    // The rig decides where a kill cam may play (cinematic and director, not
+    // the views the player flies by).
+    killCam: (s) => rig.requestKillCam({ position: s.position, velocity: s.velocity }, 3.2),
     subjectChanged: (v) => {
       if (subject && subject !== v) subject.setCockpitVisible(false);
       subject = v;
@@ -1056,6 +1056,11 @@ function boot(): void {
     hurt: () => {
       hud.onHurt(0.3);
       rig.addShake(0.35);
+      rig.requestShot('hit');
+    },
+    flakNear: (d) => {
+      rig.addShake(clamp(0.6 - d / 200, 0.1, 0.6));
+      if (d < 120) rig.requestShot('flak');
     },
     hitConfirm: () => hud.onHit(),
     report: (r) => {
@@ -1071,6 +1076,7 @@ function boot(): void {
     cinematic: 'Automatic cinematic director — set the pace and enjoy the fight.',
     director: 'Pick shots, adjust them, and build your own sequence.',
     orbit: 'Set orbit direction, height and speed.',
+    target: 'Target view — the camera keeps your enemy in frame past your tail. T switches target.',
   };
   let cameraTipUntil = 0;
   let lastCameraMode = rig.mode;
@@ -1398,7 +1404,6 @@ function boot(): void {
     game.battle.night = clamp((0.12 - lighting.sunDir.y) / 0.16, 0, 1);
   }
 
-  const _look = new THREE.Vector3();
   function render(alpha: number, frameDt: number): void {
     const dt = paused ? 0 : frameDt;
     let settingsChanged = false;
@@ -1549,13 +1554,11 @@ function boot(): void {
       threat: threat ? { position: threat.position } : null,
     });
     rig.setGunfire(Boolean(subjectPlane?.input.fire && subjectPlane.gun.jam <= 0 && subjectPlane.gun.ammo > 0));
-    // V: look at the target from the cockpit.
-    if (rig.mode === 'cockpit' && subjectPlane && target && input.isDown('KeyV')) {
-      _look.subVectors(target.position, subjectPlane.position).applyQuaternion(subjectPlane.invQ);
-      rig.setCockpitLook(Math.atan2(-_look.x, -_look.z), Math.atan2(_look.y, Math.hypot(_look.x, _look.z)));
-    } else {
-      rig.setCockpitLook(0, 0);
-    }
+    // V: padlock the target from the cockpit — the rig handles the look over
+    // the shoulder when it's dead astern.
+    rig.setCockpitPadlock(rig.mode === 'cockpit' && input.isDown('KeyV'));
+    const engineSource = subjectPlane ?? game.battle.planes.find((p) => battle.visualOf(p) === subject) ?? null;
+    if (engineSource) rig.setEngine(engineSource.rpm * Math.max(0.3, engineSource.throttle), engineSource.type.engine === 'rotary');
     const telemetrySource = game.state === 'attract'
       ? game.battle.planes.find((p) => battle.visualOf(p) === subject) ?? null
       : game.player;
@@ -1579,7 +1582,7 @@ function boot(): void {
     sfx.update(frameDt);
 
     const lens = rig.lens;
-    const dist = engine.camera.position.distanceTo(subjectPos);
+    const dist = engine.camera.position.distanceTo(rig.focusPoint);
     engine.setFocus(dist * lens.focusScale, dofOverride ?? lens.aperture);
     engine.render(frameDt);
 

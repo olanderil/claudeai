@@ -52,6 +52,8 @@ export interface GameEvents {
   killCam(subject: { position: THREE.Vector3; velocity: THREE.Vector3 }): void;
   subjectChanged(v: PlaneVisual | null): void;
   hurt(): void;
+  /** A flak burst this close to the player, metres. */
+  flakNear(distance: number): void;
   hitConfirm(): void;
   report(r: Report): void;
 }
@@ -102,6 +104,7 @@ export class Game {
       playerScored: () => events.hitConfirm(),
       gunsJammed: () => events.notify('Guns jammed', 'clearing the stoppage…', 2.2),
       gunsCleared: () => events.notify('Guns cleared', undefined, 1.4),
+      flakNear: (d) => events.flakNear(d),
     };
   }
 

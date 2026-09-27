@@ -28,6 +28,8 @@ export interface BattleListener {
   gunsJammed?(p: Plane): void;
   gunsCleared?(p: Plane): void;
   bombImpact?(pos: THREE.Vector3, owner: Plane | null): void;
+  /** A flak burst went off this close to the player. */
+  flakNear?(distance: number): void;
 }
 
 export interface SpawnOptions {
@@ -494,6 +496,11 @@ export class Battle implements PlaneEvents, TargetHooks {
   flakBurst(pos: THREE.Vector3, byTeam: Team): void {
     this.fx.flak(pos, byTeam === 'central');
     this.sfx?.flak(pos);
+    const pl = this.player;
+    if (pl?.alive && pl.team !== byTeam) {
+      const d = pos.distanceTo(pl.position);
+      if (d < 260) this.listener.flakNear?.(d);
+    }
     for (const q of this.planes) {
       if (!q.alive || q.team === byTeam) continue;
       const d = pos.distanceTo(q.position);

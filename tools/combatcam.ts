@@ -493,31 +493,31 @@ console.log('\nTHE COMBAT SHOTS — dealt in a fight, never outside one');
   {
     Math.random = realRandom;
     const engage = new Set(['guns-eye', 'on his six', 'wingman view', 'crossing']);
-    let cutAt = -1;
     let cutTo = '';
     let range = 0;
+    let crossed = -1;
     const d = new CinematicDirector();
     const player = makePlane();
     const target = makePlane();
-    let last = '';
     for (let i = 0; i < 120 * 40; i++) {
       const t = i * DT;
       straight(player, new THREE.Vector3(0, ALT, 0), new THREE.Vector3(0, 0, -SPEED), t);
       straight(target, new THREE.Vector3(30, ALT + 40, -2000), new THREE.Vector3(0, 0, SPEED), t);
       d.setCombat({ target: { position: target.root.position, velocity: target.velocity }, threat: null });
+      const before = d.shotName;
       d.update(DT, player.root.position, player.root.quaternion, tel, camera, () => 0,
         { velocity: player.velocity });
       const gap = player.root.position.distanceTo(target.root.position);
-      if (d.shotName !== last && i > 0 && gap < COMBAT_RANGE && cutAt < 0) {
-        cutAt = t;
+      // The frame the bandit comes inside four-fifths of the combat range, and
+      // the one after: the cut has to be there.
+      if (crossed < 0 && gap < COMBAT_RANGE * 0.8) crossed = i;
+      if (crossed >= 0 && i <= crossed + 1 && d.shotName !== before) {
         cutTo = d.shotName;
         range = gap;
       }
-      last = d.shotName;
     }
-    console.log(`  cut to "${cutTo}" with the bandit ${range.toFixed(0)} m off`);
+    console.log(`  cut to "${cutTo || 'nothing'}" as the bandit came inside ${range.toFixed(0)} m`);
     if (!engage.has(cutTo)) fail('the fight opening was not cut to an engagement shot');
-    if (range < COMBAT_RANGE * 0.7) fail('the engagement cut came late');
   }
 
   // Every shot that frames the pair, forced, in a turning fight: both in
