@@ -389,6 +389,18 @@ class AerodromeRaid extends Mission {
       }
       this.host.notify('They are scrambling', 'catch them on the ground', 3.5);
     }
+    // Point at the nearest standing hangar rather than the field centre.
+    let near: Target | null = null;
+    let nd = Infinity;
+    for (const h of this.hangars) {
+      if (!h.alive) continue;
+      const d = p ? h.position.distanceTo(p.position) : 0;
+      if (d < nd) {
+        nd = d;
+        near = h;
+      }
+    }
+    this.objectives[0].marker = near?.position ?? null;
     const hd = this.hangars.filter((t) => !t.alive).length;
     const pd = this.parked.filter((q) => !q.alive).length;
     this.objectives[0].progress = `${hd} / ${this.hangars.length}`;

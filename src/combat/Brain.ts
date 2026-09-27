@@ -19,7 +19,15 @@ export type Orders =
   | { kind: 'escort'; leader: Plane; slot: THREE.Vector3; range: number }
   | { kind: 'patrol'; centre: THREE.Vector3; radius: number; engage: number }
   | { kind: 'route'; points: THREE.Vector3[]; loop: boolean; speed: number; index: number }
-  | { kind: 'defend'; ward: Plane; range: number };
+  | { kind: 'defend'; ward: Plane; range: number }
+  /** Attack runs on something that isn't an aircraft: a balloon, a gun pit, the airship. */
+  | { kind: 'attack'; target: AttackTarget; ground: boolean };
+
+export interface AttackTarget {
+  readonly position: THREE.Vector3;
+  readonly velocity?: THREE.Vector3;
+  readonly alive: boolean;
+}
 
 export interface BrainWorld {
   readonly planes: readonly Plane[];
@@ -109,6 +117,10 @@ export class Brain {
       _t1.set(p.fwd.x, 0, p.fwd.z).normalize();
       dest.copy(p.position).addScaledVector(_t1, 300);
       dest.y += 40;
+    } else if (orders.kind === 'attack' && !t && !this.retreat && orders.target.alive) {
+      const r = this.attackRun(orders.target, orders.ground, dt, dest);
+      fire = r.fire;
+      throttle = r.throttle;
     } else if (t && !this.retreat) {
       const d = p.position.distanceTo(t.position);
       const tof = d / BULLET_SPEED;
@@ -175,7 +187,8 @@ export class Brain {
       const z = p.position.z + p.velocity.z * s;
       minClear = Math.min(minClear, y - w.ground(x, z));
     }
-    const floor = orders.kind === 'route' ? 160 : 90;
+    // Strafing means going down to the deck; everything else keeps its height.
+    const floor = orders.kind === 'route' ? 160 : orders.kind === 'attack' && orders.ground ? 38 : 90;
     if (agl < floor + 20 || minClear < floor - 20) this.avoidT = 1.6;
     if (this.avoidT > 0) {
       this.avoidT -= dt;
@@ -263,6 +276,10 @@ export class Brain {
     } else if (o.kind === 'patrol') {
       range = o.engage;
       anchor = o.centre;
+    } else if (o.kind === 'attack') {
+      // Only turn on fighters that come close; the job is the target.
+      range = 450;
+      anchor = p.position;
     }
     let best: Plane | null = null;
     let bs = Infinity;
@@ -301,6 +318,37 @@ export class Brain {
       if (o.fwd.dot(_t1) > 0.94 && p.fwd.dot(_t1) > -0.2) return o;
     }
     return null;
+  }
+
+  /**
+   * One attack run: come in from height, dive on the aim point, fire from
+   * inside ~450 m, pull out low and extend, then come round again.
+   */
+  private attackRun(t: AttackTarget, ground: boolean, dt: number, dest: THREE.Vector3): { fire: boolean; throttle: number } {
+    const p = this.p;
+    const d = p.position.distanceTo(t.position);
+    const flat = Math.hypot(t.position.x - p.position.x, t.position.z - p.position.z);
+    if (flat > 1500) {
+      // Approach at height, 250 m above a ground target or level with an airborne one.
+      dest.copy(t.position);
+      if (ground) dest.y = Math.max(p.position.y, t.position.y + 280);
+      return { fire: false, throttle: 1 };
+    }
+    const tof = d / BULLET_SPEED;
+    dest.copy(t.position);
+    if (t.velocity) dest.addScaledVector(_rel.subVectors(t.velocity, p.velocity), tof);
+    else dest.addScaledVector(p.velocity, -tof);
+    dest.y += 0.5 * BULLET_GRAVITY * tof * tof + (ground ? 1.5 : 0);
+    _t1.subVectors(dest, p.position).normalize();
+    const cosA = _t1.dot(p.fwd);
+    const fire = d < 480 && cosA > Math.cos(0.035 + (1 - this.skill) * 0.03) && p.gun.heat < 0.8;
+    const agl = p.position.y - this.world.ground(p.position.x, p.position.z);
+    if (d < 70 || (ground && agl < 45 && d < 260)) {
+      this.mode = 'extend';
+      this.modeT = 4 + Math.random() * 2;
+    }
+    void dt;
+    return { fire, throttle: ground ? 0.8 : 1 };
   }
 
   /** Closest point of approach with every other machine; break away if it's close. */

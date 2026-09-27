@@ -22,7 +22,7 @@ import { settlements } from './world/Settlements';
 import { clamp } from './util/math';
 import { QUALITY_PRESETS, DEFAULT_QUALITY } from './render/Quality';
 import { Game, DEFAULT_PILOT } from './game/Game';
-import type { MissionInfo } from './game/Campaign';
+import { MISSIONS, type MissionInfo } from './game/Campaign';
 import type { PlaneVisual } from './combat/PlaneVisual';
 import { warmGroundModels } from './combat/GroundModels';
 
@@ -1965,6 +1965,7 @@ function boot(): void {
         terrainHeight, groundHeight, settlements, structures, toggleTour,
         startQuickBattle, startMission, startWatch, quitToMenu, pause,
         get paused() { return paused; },
+        missions: MISSIONS,
         /** Run the game for `seconds` of game time without drawing. */
         advance: (seconds: number, frame = 1 / 30): number => {
           const t0 = performance.now();

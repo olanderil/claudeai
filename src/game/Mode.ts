@@ -276,7 +276,11 @@ export abstract class Mode {
   protected balloons(side: 1 | -1, count = 3, guns = true): Target[] {
     const team = this.sideTeam(side);
     const out: Target[] = [];
-    const anchors = balloonAnchors(side).slice(0, count);
+    // The sites nearest home first: a balloon 11 km along the line is out of the fight.
+    const anchors = balloonAnchors(side)
+      .slice()
+      .sort((a, b) => Math.hypot(a.x - this.home.x, a.z - this.home.z) - Math.hypot(b.x - this.home.x, b.z - this.home.z))
+      .slice(0, count);
     for (const a of anchors) {
       const gy = this.battle.ground(a.x, a.z);
       const t = makeBalloon(team, a.x, gy, a.z, rand(340, 420), -Math.atan2(1.0, 2.4) + Math.PI / 2);
@@ -297,7 +301,10 @@ export abstract class Mode {
   protected groundTargets(side: 1 | -1, kinds?: string[], limit = 99): Target[] {
     const team = this.sideTeam(side);
     const out: Target[] = [];
-    for (const s of frontTargets(side)) {
+    const sites = frontTargets(side)
+      .slice()
+      .sort((a, b) => Math.hypot(a.x - this.home.x, a.z - this.home.z) - Math.hypot(b.x - this.home.x, b.z - this.home.z));
+    for (const s of sites) {
       if (kinds && !kinds.includes(s.kind)) continue;
       if (out.length >= limit) break;
       const t = makeGroundTarget(s.kind, team, s.x, this.battle.ground(s.x, s.z), s.z, s.rotY);

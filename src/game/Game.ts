@@ -4,6 +4,7 @@ import { groundHeight } from '../world/Terrain';
 import { farAerodrome, frontZ, homeAerodrome, isWater } from '../world/Front';
 import { Battle } from '../combat/Battle';
 import type { Plane } from '../combat/Plane';
+import type { Brain } from '../combat/Brain';
 import type { PlaneVisual } from '../combat/PlaneVisual';
 import { FIGHTERS, type AirframeId, type Team } from '../combat/Types';
 import type { Sfx } from '../audio/Sfx';
@@ -142,6 +143,7 @@ export class Game {
     this.kp = this.kr = this.ky = 0;
     this.centreArena();
     mode.start();
+    this.fitArena();
     if (this.autopilot && this.player) this.battle.setBrain(this.player, 0.7);
   }
 
@@ -152,6 +154,15 @@ export class Game {
     const cx = (h.x + f.x) / 2;
     this.battle.arenaCentre.set(cx, 0, frontZ(cx));
     this.battle.arenaRadius = Math.max(7000, Math.hypot(h.x - f.x, h.z - f.z) * 0.75);
+  }
+
+  /** Grow the arena until it holds every target the sortie placed, with room to turn. */
+  private fitArena(): void {
+    const b = this.battle;
+    for (const t of b.targets) {
+      const d = Math.hypot(t.position.x - b.arenaCentre.x, t.position.z - b.arenaCentre.z);
+      b.arenaRadius = Math.max(b.arenaRadius, d + 1800);
+    }
   }
 
   /** Back to the title-screen dogfight. */
@@ -190,11 +201,38 @@ export class Game {
     if (this.state === 'attract') this.maintainAttract(dt);
   }
 
+  private ordersT = 0;
+
+  /**
+   * Watching, the autopilot flies the sortie as a pilot would: straight at
+   * the objective the HUD is pointing to — a balloon, a gun pit, the airship
+   * — and only turns on fighters that come close. With nothing to point at,
+   * it hunts.
+   */
+  private orderAutopilot(dt: number): void {
+    this.ordersT -= dt;
+    const p = this.player;
+    const brain = p?.brain as Brain | null | undefined;
+    if (!p || !p.alive || !brain || this.ordersT > 0) return;
+    this.ordersT = 2;
+    const marker = this.mode?.objectives.find((o) => o.marker && !o.done && !o.failed)?.marker ?? null;
+    const target = marker ? this.battle.targets.find((t) => t.alive && t.position === marker) ?? null : null;
+    if (target && target.team !== p.team) {
+      const o = brain.orders;
+      if (o.kind !== 'attack' || o.target !== target) {
+        brain.orders = { kind: 'attack', target, ground: target.kind !== 'balloon' && target.kind !== 'zeppelin' };
+      }
+    } else if (brain.orders.kind === 'attack') {
+      brain.orders = { kind: 'hunt' };
+    }
+  }
+
   /** Per rendered frame: modes, targeting, the end of the sortie. */
   frame(dt: number): void {
     const m = this.mode;
     if (this.state === 'playing' && m) {
       m.update(dt);
+      if (this.autopilot) this.orderAutopilot(dt);
       this.updateTargeting(dt);
       if (m.status !== 'running' && m.endT <= 0 && !this.reported) {
         this.reported = true;
