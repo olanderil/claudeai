@@ -149,8 +149,15 @@ export class Ballistics {
     }
   }
 
-  /** Lay the tracer instances out for this frame. */
-  render(): void {
+  /**
+   * Lay the tracer instances out for this frame.
+   *
+   * A tracer is a few centimetres across, which is sub-pixel beyond fifty
+   * metres — yet what the eye sees is the burning compound's glow, a streak
+   * that stays visible to the end of its burn. So each streak is kept at
+   * least a pixel and a half wide wherever it is.
+   */
+  render(eye: THREE.Vector3, glow?: (pos: THREE.Vector3, size: number) => void): void {
     let n = 0;
     for (const r of this.rounds) {
       if (!r.active || !r.tracer) continue;
@@ -162,7 +169,12 @@ export class Ballistics {
       _q.setFromUnitVectors(Z_AXIS, _dir);
       // Burn-out: the tracer compound gives up well before the round falls.
       const fade = Math.min(1, r.life / 0.5);
-      _s.set(fade, fade, len);
+      const dist = eye.distanceTo(_c);
+      const w = fade * Math.max(1, (dist * 0.0024) / 0.07);
+      // Seen from astern — which is how you usually see your own — a streak is
+      // end-on and all but vanishes; the burning head is what reads.
+      glow?.(r.pos, fade * Math.max(0.6, dist * 0.0068));
+      _s.set(w, w, len);
       _m.compose(_c, _q, _s);
       this.tracers.setMatrixAt(n, _m);
       this.tracers.setColorAt(n, r.team === 'allied' ? this.allied : this.central);

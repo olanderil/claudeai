@@ -78,6 +78,7 @@ const _q = new THREE.Quaternion();
 const _s = new THREE.Vector3(1, 1, 1);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const TRACER_GLOW = [1.0, 0.72, 0.36];
 
 const rand = (a: number, b: number): number => a + Math.random() * (b - a);
 function randDir(out: THREE.Vector3): THREE.Vector3 {
@@ -687,7 +688,12 @@ export class Battle implements PlaneEvents, TargetHooks {
     }
     this.renderBombs();
     this.renderBeams();
-    this.ballistics.render();
+    const spark = this.fx.spark;
+    const tracerGlow = (pos: THREE.Vector3, size: number): void => {
+      // One frame's life: redrawn fresh at the round's position every frame.
+      spark.spawn(pos.x, pos.y, pos.z, 0, 0, 0, Math.max(dt, 1 / 240) * 1.5, size, size, TRACER_GLOW, TRACER_GLOW, 1, 1, 0, 0);
+    };
+    this.ballistics.render(camera.position, tracerGlow);
     if (this.barrage > 0) this.stepBarrage(dt, camera.position);
     this.fx.update(dt);
     this.updateAudio();

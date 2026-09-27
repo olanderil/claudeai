@@ -75,7 +75,7 @@ export class Effects {
   constructor() {
     this.smoke = new ParticleSystem(5000, puffTexture(128, 11, 7, 0.55), false, 6);
     this.fire = new ParticleSystem(2600, flameTexture(128, 5), true, 7, 3.2);
-    this.spark = new ParticleSystem(1200, glowTexture(32, 2), true, 7, 6);
+    this.spark = new ParticleSystem(3000, glowTexture(32, 2), true, 7, 6);
     this.group.add(this.smoke.mesh, this.fire.mesh, this.spark.mesh);
     // Two, permanently in the scene: every lit material pays for each point
     // light whether it's on or not, and adding or removing them recompiles
@@ -212,8 +212,8 @@ export class Effects {
   trail(pos: THREE.Vector3, vel: THREE.Vector3, heavy: boolean, burning: boolean): void {
     const far = !this.near(pos, 3000);
     this.smoke.spawn(pos.x, pos.y, pos.z, vel.x * 0.05 + rand(-1, 1), vel.y * 0.05 + rand(0, 1), vel.z * 0.05 + rand(-1, 1),
-      rand(2.5, heavy ? 6 : 3.5) * (far ? 1.5 : 1), 1.4, heavy ? rand(8, 14) : rand(5, 8),
-      heavy ? C.smokeBlack : C.smokeMid, heavy ? C.smokeMid : C.smokeLight, heavy ? 0.8 : 0.45, 0, 1.2, 0.8, burning ? 0.8 : 0);
+      rand(2.5, heavy ? 6 : 3.5) * (far ? 1.5 : 1), 1.2, heavy ? rand(7, 11) : rand(4.5, 7),
+      heavy ? C.smokeDark : C.smokeMid, heavy ? C.smokeMid : C.smokeLight, heavy ? 0.55 : 0.4, 0, 1.2, 0.8, burning ? 0.8 : 0);
     if (burning && !far) {
       this.fire.spawn(pos.x, pos.y, pos.z, vel.x * 0.85, vel.y * 0.85, vel.z * 0.85, rand(0.15, 0.35), 1.8, 3.8,
         C.fireHot, C.fireCool, 1, 0, 2, 0);
