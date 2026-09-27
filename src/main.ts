@@ -5,51 +5,38 @@ import { Loop } from './core/Loop';
 import {
   World, TIME_PRESETS, WEATHER_PRESETS, SEASON_PRESETS, WORLD_PRESETS, DRIFT_RATES,
 } from './world/World';
-import { terrainHeight, groundHeight, spawnPoint, fieldElevation, activeWorld, SEA_LEVEL } from './world/Terrain';
-import { FlightModel, HORNET } from './flight/FlightModel';
-import { Controls, DEFAULT_SETTINGS, type FlightMode, type StickInput } from './flight/Controls';
-import { Aircraft } from './flight/Aircraft';
-import { Autopilot, type TourWorld } from './flight/Autopilot';
+import { terrainHeight, groundHeight, activeWorld, SEA_LEVEL } from './world/Terrain';
 import { CameraRig, CAMERA_MODES, type FreeView } from './camera/CameraRig';
-import { boats } from './world/Boats';
-import { structures, structureHeight, structureRadius, turbineSpin } from './world/Structures';
-import { balloons, balloonDrift } from './world/Balloons';
-import { contrailTime } from './world/Contrails';
-import { fogCover, FOG_GLSL } from './world/GroundFog';
+import { structures, structureHeight, structureRadius } from './world/Structures';
 import {
   shotCatalogue, DIRECTOR_STYLES, LANDMARK_TRIPOD,
   type ShotInfo, type ShotSlot, type Scale, type LandmarkTarget,
 } from './camera/Cinematic';
-import { HUD, type HudStatus, type HudMessage } from './ui/HUD';
+import { CombatHUD, type HudMessage } from './ui/CombatHUD';
+import { Menus } from './ui/Menus';
 import { Panel } from './ui/Panel';
 import { Tips } from './ui/Tips';
 import { Radio, STATIONS } from './audio/Radio';
-import { airstrips, nearestAirstrip, settlements } from './world/Settlements';
-import { pyramids } from './world/Landmarks';
-import { citySites } from './world/City';
-import { DEG, MS_TO_KT, RAD, angleDelta, clamp } from './util/math';
+import { Sfx } from './audio/Sfx';
+import { settlements } from './world/Settlements';
+import { clamp } from './util/math';
 import { QUALITY_PRESETS, DEFAULT_QUALITY } from './render/Quality';
+import { Game, DEFAULT_PILOT } from './game/Game';
+import type { MissionInfo } from './game/Campaign';
+import type { PlaneVisual } from './combat/PlaneVisual';
 
 /** Physics rate. Fixed and high enough that the aero integration stays stable. */
 const PHYSICS_HZ = 120;
-/** Reused scratch for the current world's spawn point. */
-const START_POSITION = new THREE.Vector3();
-/** A stick nobody is holding — used to fly the attract-mode flight hands-off. */
-const IDLE_STICK: StickInput = { pitch: 0, roll: 0, yaw: 0, throttleAxis: 0, brake: false };
-/** Cruise speed and clearance for the attract flight. */
-const INTRO_SPEED = 235;
-const INTRO_CLEARANCE = 1800;
 /** How far the director will look for something to frame the aircraft against. */
-const LANDMARK_RANGE = 14000;
+const LANDMARK_RANGE = 9000;
 /**
  * How far off a landmark can be and still be offered to the camera, metres.
  *
- * Shorter than the city range, and deliberately. A skyline reads from fourteen
- * kilometres; a lighthouse you are meant to stand a tripod at does not, and
- * offering one from that far out only means the director keeps choosing shots
- * whose subject never arrives.
+ * A church tower or a fort you are meant to stand a tripod at does not read
+ * from further out, and offering one from that far only means the director
+ * keeps choosing shots whose subject never arrives.
  */
-const STRUCTURE_RANGE = 6000;
+const STRUCTURE_RANGE = 5000;
 /** Frame rate and bitrate for a recording of the flight. */
 const RECORD_FPS = 60;
 const RECORD_BITRATE = 12_000_000;
@@ -77,8 +64,6 @@ const RECORD_FORMATS = [
   { mime: 'video/webm;codecs=vp9', extension: 'webm', label: 'WebM · VP9' },
   { mime: 'video/webm', extension: 'webm', label: 'WebM' },
 ];
-/** Least air left under the aircraft after N drops a new world beneath it. */
-const NEW_WORLD_CLEARANCE = 400;
 
 function boot(): void {
   const sceneCanvas = document.getElementById('scene') as HTMLCanvasElement;
@@ -87,8 +72,6 @@ function boot(): void {
   // Tells the stylesheet the script is running, so the help panel can be held
   // back until it is asked for. Without it the panel is the no-script fallback.
   overlay.classList.add('scripted');
-  const chooseTour = document.getElementById('choose-tour') as HTMLButtonElement;
-  const chooseManual = document.getElementById('choose-manual') as HTMLButtonElement;
 
   const shotLabel = document.getElementById('shot') as HTMLDivElement;
 
@@ -116,7 +99,7 @@ function boot(): void {
    * there is nowhere else to put this, and a failure to read or write it must
    * never stop the sim starting.
    */
-  const VIEWS_KEY = 'horizon-f18.free-views';
+  const VIEWS_KEY = 'horizon-1917.free-views';
 
   function saveFreeViews(): void {
     try {
@@ -127,7 +110,7 @@ function boot(): void {
     }
   }
 
-  const TWEAKS_KEY = 'horizon-f18.shot-tweaks';
+  const TWEAKS_KEY = 'horizon-1917.shot-tweaks';
 
   /**
    * Throw away the shot adjustments an earlier session left behind.
@@ -152,7 +135,7 @@ function boot(): void {
 
   // The saved shots and the chosen pace travel together: they are both "how I
   // like the director", and one key keeps them from disagreeing.
-  const DIRECTOR_KEY = 'horizon-f18.director';
+  const DIRECTOR_KEY = 'horizon-1917.director';
 
   function saveDirector(): void {
     try {
@@ -219,20 +202,11 @@ function boot(): void {
   function nearestLandmark(from: THREE.Vector3): THREE.Vector3 | null {
     let best: { x: number; z: number } | null = null;
     let bestD = LANDMARK_RANGE;
-    for (const c of citySites()) {
-      const d = Math.hypot(c.x - from.x, c.z - from.z);
+      for (const v of settlements()) {
+      const d = Math.hypot(v.x - from.x, v.z - from.z);
       if (d < bestD) {
         bestD = d;
-        best = c;
-      }
-    }
-    if (best === null) {
-      for (const v of settlements()) {
-        const d = Math.hypot(v.x - from.x, v.z - from.z);
-        if (d < bestD) {
-          bestD = d;
-          best = v;
-        }
+        best = v;
       }
     }
     return best === null ? null : landmarkPoint.set(best.x, 0, best.z);
@@ -268,7 +242,7 @@ function boot(): void {
   /** Offer a captured file to the browser's downloads. */
   function saveCapture(blob: Blob, extension: string): void {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const name = `horizon-f18-${activeWorld().name.toLowerCase().replace(/ /g, '-')}-${stamp}`;
+    const name = `horizon-1917-${activeWorld().name.toLowerCase().replace(/ /g, '-')}-${stamp}`;
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -284,7 +258,7 @@ function boot(): void {
   // The one part of the sim that reaches the network, and only when asked: the
   // panel is built from the station table but nothing is fetched until a
   // station is clicked.
-  const RADIO_KEY = 'horizon-f18.radio';
+  const RADIO_KEY = 'horizon-1917.radio';
   const savedRadio = ((): { station?: number; volume?: number; playing?: boolean } => {
     try {
       return JSON.parse(window.localStorage.getItem(RADIO_KEY) ?? '{}') as
@@ -435,23 +409,14 @@ function boot(): void {
 
   const engine = new Engine(sceneCanvas);
   const world = new World(engine);
-
-  // Ground includes the carrier deck, so landing on the ship needs no special case.
-  const model = new FlightModel(HORNET, groundHeight);
-  const controls = new Controls(HORNET);
-  const aircraft = new Aircraft(HORNET.gearHeight);
   // The rig samples the ground so the cinematic camera cannot end up inside a hill.
-  // The camera's floor is the ground *or the water*, whichever is higher.
-  //
-  // `groundHeight` is the terrain, and over the sea the terrain is metres below
-  // the surface — so the clamp that keeps a camera out of a hillside happily
-  // put it under water. Measured, a planted shot over deep water sat at −175 m
-  // with the lens pointed up: from there the ocean plane covers the entire sky,
-  // and its far reaches are exactly the fragments that fight the sky for depth.
-  // Nothing wants a camera underwater in any case.
+  // The camera's floor is the ground *or the water*, whichever is higher: a
+  // camera clamped to the sea bed with its lens pointed up sees nothing but
+  // the underside of the ocean plane.
   const cameraFloor = (x: number, z: number): number =>
     Math.max(groundHeight(x, z), SEA_LEVEL);
   const rig = new CameraRig(engine.camera, cameraFloor);
+
   // --- The director bar ------------------------------------------------------
   //
   // Every control here goes through the same call its keyboard shortcut does,
@@ -1028,233 +993,124 @@ function boot(): void {
     showShotShape(false);
   });
 
-  const hud = new HUD(hudCanvas);
+  const hud = new CombatHUD(hudCanvas);
   const input = new Input(sceneCanvas);
-  const autopilot = new Autopilot();
-  /**
-   * What to suggest while the scenic flight is flying itself.
-   *
-   * The tour exists so the pilot can play with the world instead of the stick,
-   * which only works if they know they can. One at a time, on a slow rotation:
-   * a wall of hints over the view would defeat the object.
-   */
-  const TOUR_TIPS: [string, string][] = [
-    ['C', 'Press C to cycle camera modes'],
-    ['T', 'Press T to change the time of day'],
-    ['R', 'Press R to change the weather'],
-    ['SPACE', 'Press SPACE for the style panel'],
-  ];
-  /** Keys the pilot has already used — stop suggesting those. */
-  const tourUsed = new Set<string>();
-  const TOUR_TIP_SECONDS = 11;
-  let tourTipIndex = 0;
-  let tourTipTimer = 0;
-  /** Whether the hint line is shown at all — the Controls tab turns it off. */
-  let tipsVisible = true;
-  /**
-   * How fast the scenic flight runs against the clock.
-   *
-   * Simulated time only. The aircraft is not flown faster — at three times the
-   * speed a jet's turning circle grows ninefold and the tour would stop fitting
-   * the landscape — the *clock* runs faster, so more of the flight happens per
-   * second. The camera keeps real time either way, which is what stops a
-   * three-times tour looking like a fast-forwarded video.
-   */
-  const TOUR_SPEEDS = [0.5, 1, 1.5, 2, 3];
-  let tourSpeedIndex = 1;
-  /** Where a scenic flight starts: Standard shots at twice real time. */
-  const TOUR_STYLE = 1;
-  const TOUR_SPEED_INDEX = TOUR_SPEEDS.indexOf(2);
-
-  /**
-   * Seconds until the next tour, or 0 when none is pending.
-   *
-   * A tour that simply stopped on the runway of the world it had just shown you
-   * would be an odd place to leave someone who asked for a scenic flight, so
-   * landing rolls into a fresh world and the next departure.
-   */
-  let nextTourIn = 0;
-  const LANDED_PAUSE = 4.5;
-
-  /** Apply the tour rate — only ever while the tour is the one flying. */
-  function applyTourSpeed(): void {
-    loop.timeScale = autopilot.active ? TOUR_SPEEDS[tourSpeedIndex] : 1;
+  const sfx = new Sfx();
+  const SFX_KEY = 'horizon-1917.sfx';
+  try {
+    const v = Number(window.localStorage.getItem(SFX_KEY));
+    if (window.localStorage.getItem(SFX_KEY) !== null && Number.isFinite(v)) sfx.setVolume(v);
+  } catch {
+    // No storage: the default volume stands.
   }
+
+  // --- Watch: the AI flies your machine and the director films it ----------
+  //
+  // The jet's scenic flight became this. The speeds are the tour's speeds,
+  // pulled down at the low end so a dogfight can be watched in slow motion.
+  const TOUR_SPEEDS = [0.25, 0.5, 1, 1.5, 2];
+  let tourSpeedIndex = 2;
+  function applyTourSpeed(): void {
+    loop.timeScale = game.autopilot ? TOUR_SPEEDS[tourSpeedIndex] : 1;
+  }
+
   const tips = new Tips(() => {
     tipsVisible = false;
     tips.clear();
     notify('TIPS OFF', 'the Controls tab brings them back', 3);
     panel.sync();
   });
-
-  engine.scene.add(aircraft.root);
-  spawnHere();
-  // Build the opening view's terrain up front — this happens behind the start
-  // overlay, so the cost is invisible and the first frame is already complete.
-  world.prime(model.position);
+  let tipsVisible = true;
 
   let paused = false;
-  /** True while the title screen's attract flight owns the aircraft. */
+  /** The title sequence and the main menu: the attract dogfight plays behind them. */
   let introRunning = true;
-  // Declared before the first applyQuality() call below: `function` hoists but
-  // `let` does not, so calling it any earlier hits the temporal dead zone.
+  let showMap = true;
   let qualityIndex = DEFAULT_QUALITY;
-
   function applyQuality(): void {
     const preset = QUALITY_PRESETS[qualityIndex];
     engine.applyQuality(preset);
     world.applyQuality(preset);
   }
   applyQuality();
+
   let message: HudMessage | null = null;
-  let crashTimer = 0;
-  /** Countdown for self-clearing HUD lines. Zero while a crash owns the line. */
   let messageTimer = 0;
+  let cameraMode = 'CHASE';
+  let subject: PlaneVisual | null = null;
+  const subjectPos = new THREE.Vector3();
+  const listenerVel = new THREE.Vector3();
 
-  // Interpolated render pose, so the visual is smooth even though physics is stepped.
-  const renderPosition = new THREE.Vector3();
-  const renderQuaternion = new THREE.Quaternion();
+  const game = new Game({
+    notify: (t, s, sec) => notify(t, s, sec),
+    cue: (k) => sfx.ui(k),
+    killCam: (s) => {
+      if (rig.mode === 'cinematic') rig.requestKillCam({ position: s.position, velocity: s.velocity }, 3.2);
+    },
+    subjectChanged: (v) => {
+      if (subject && subject !== v) subject.setCockpitVisible(false);
+      subject = v;
+      rig.snap();
+    },
+    hurt: () => {
+      hud.onHurt(0.3);
+      rig.addShake(0.35);
+    },
+    hitConfirm: () => hud.onHit(),
+    report: (r) => {
+      showMenusCursor();
+      menus.showReport(r, game.mission);
+    },
+  }, sfx);
+  engine.scene.add(game.battle.group);
 
-  const status: HudStatus = {
-    cameraMode: 'CHASE',
-    assists: true,
-    flightMode: 'MANUAL',
-    paused: false,
-    message: null,
-    timeOfDay: world.timeOfDay,
-    fps: 0,
-    frameMs: 0,
-  };
-
-  /**
-   * How long the director's gesture hint stays up, per visit to the mode.
-   *
-   * Wall clock, not accumulated frame time. "Thirty seconds" is a promise to
-   * the reader, and counting frames makes it thirty seconds only on a machine
-   * hitting frame rate — measured on a slow one, forty-four seconds of reading
-   * time had not yet spent the budget.
-   */
+  // --- Tips -----------------------------------------------------------------
   const CAMERA_TIP_MS = 30_000;
-  /**
-   * What each camera mode is, in one line.
-   *
-   * These used to be the second line of the big centred notice, in white over
-   * whatever the landscape happened to be doing — which is the hardest place in
-   * the whole interface to read a sentence. They are tips now: same words, but
-   * on the dark pill at the bottom of the screen that everything else
-   * explanatory already uses.
-   *
-   * Chase and cockpit are absent on purpose. A view out of the aeroplane needs
-   * no explaining, and a pill that says so is just something else on the glass.
-   */
   const CAMERA_TIPS: Partial<Record<typeof rig.mode, string>> = {
-    cinematic: 'Automatic Cinematic Director — Just set the pace and enjoy.',
-    director: 'Pick shots, adjust settings, and build your sequence.',
-    orbit: 'Set orbit direction, height, and speed.',
+    cinematic: 'Automatic cinematic director — set the pace and enjoy the fight.',
+    director: 'Pick shots, adjust them, and build your own sequence.',
+    orbit: 'Set orbit direction, height and speed.',
   };
   let cameraTipUntil = 0;
   let lastCameraMode = rig.mode;
   let lastShapeMode = rig.mode;
   let lastReelPosition = '';
-
-  /**
-   * Contextual hints. Each is evaluated every frame and shown only while its
-   * situation applies, so they retire themselves once acted on rather than
-   * needing to be dismissed.
-   */
-  /**
-   * How the tips behave, rather than what they say.
-   *
-   * A hint that is always on screen stops being a hint and becomes furniture —
-   * and the whole point of this sim is the view behind it. So a line comes up,
-   * says its piece, and goes away again; nothing is shown continuously, and
-   * the ones that teach a key are said **once**. There is no value in the
-   * eleventh telling of "press C to cycle cameras": either it landed the first
-   * time or the tip was never going to be what fixed it.
-   */
-  //
-  // Both spans are wall clock, not accumulated frame time. "Nine seconds" is a
-  // promise to the reader, and counting frames keeps it only on a machine
-  // hitting frame rate — measured on a slow one, nine counted seconds took
-  // twenty-two real ones and the rest between tips ran to a minute.
-  const TIP_SHOW_MS = 9_000;
-  const TIP_REST_MS = 26_000;
-  /** The line on screen, and when it went up; null while the screen is resting. */
+  const TIP_SHOW_MS = 9000;
+  const TIP_REST_MS = 22000;
   let tipLine: string | null = null;
   let tipShownAt = 0;
   let tipHiddenAt = 0;
-  /** Lines that have had their turn and are not coming back. */
   const tipsSaid = new Set<string>();
-
-  /** A candidate line: `once` means it retires as soon as it has been read. */
   interface Candidate {
     text: string;
     once?: boolean;
   }
 
+  /** One quiet line at a time, and only the one that helps right now. */
   function updateTips(): void {
-    const t = model.telemetry;
-    const knots = t.ias * MS_TO_KT;
-
-    // One tip, ever.
-    //
-    // These used to be independent, each appearing when its own situation
-    // applied — and three of them applied at once on every takeoff, stacking
-    // up over the view the whole thing exists to show. They are a priority
-    // list now: the first line whose situation holds is the line you get.
+    const p = game.player;
     const lines: (Candidate | null)[] = [];
-
-    // Working the camera outranks everything else, including the scenic
-    // flight's own status line: these controls are undiscoverable, and the one
-    // moment they matter is while you are in the mode.
     lines.push(rig.mode === 'free'
       ? { text: 'Drag to orbit · wheel to zoom · shift-drag to reframe · '
-        + '1-9 saved views, shift+number to save · X plants the camera ahead of you' }
-      // The bar below carries the shot, the pin state and — behind its question
-      // mark — the key list, so the tip is left with the one thing that has
-      // nowhere else to live: the gesture, which no button can show you.
+          + '1-9 saved views, shift+number to save · X plants the camera ahead of you' }
       : performance.now() < cameraTipUntil && CAMERA_TIPS[rig.mode] !== undefined
         ? { text: CAMERA_TIPS[rig.mode] as string }
         : null);
-
-    if (autopilot.active) {
-      // What the flight is doing, and — once each — what you could be doing
-      // while it does it.
-      const rate = TOUR_SPEEDS[tourSpeedIndex];
-      const hint = TOUR_TIPS.find(([key, text]) => !tourUsed.has(key) && !tipsSaid.has(text));
-      lines.push(hint !== undefined
-        ? { text: hint[1], once: true }
-        : { text: `SCENIC FLIGHT · ${tourNarration()}` + (rate === 1 ? '' : ` · ${rate}×`) });
-    } else {
-      // On the runway, until fast enough to rotate. Not a one-shot: it is the
-      // answer to "how do I take off", and every flight starts here.
-      lines.push(t.onGround && knots < 150 && !model.crashed
-        ? { text: 'Throttle with SHIFT and rise up at speed 150+' }
-        : null);
-
-      // Climbing away with the gear still down. Gated on climbing so it does
-      // not reappear on approach, when the gear is supposed to be down.
-      lines.push(!t.onGround && t.altitude > 1000
-        && controls.gearExtension > 0.5 && t.verticalSpeed > 0
-        ? { text: 'Press L to raise landing gear', once: true }
-        : null);
-
-      // Gear down and airborne reads as "looking for somewhere to land", so
-      // that is when the nearest village strip is worth pointing at. The range
-      // changes as you fly, so this one is written fresh each time.
-      const seekingField =
-        !t.onGround && !model.crashed && controls.gearDown && controls.gearExtension > 0.5;
-      const callout = seekingField ? airstripCallout() : null;
-      lines.push(callout === null ? null : { text: callout });
+    if (game.autopilot) {
+      lines.push({ text: `WATCHING · the autopilot is fighting · any stick input takes over`
+        + (TOUR_SPEEDS[tourSpeedIndex] === 1 ? '' : ` · ${TOUR_SPEEDS[tourSpeedIndex]}×`) });
+    } else if (p && p.alive) {
+      lines.push({ text: 'Fire with SPACE in short bursts — hot guns jam', once: true });
+      lines.push(game.target ? { text: 'T switches target · C then the target view keeps it in sight', once: true } : null);
+      lines.push(p.gun.ammo < 200 || p.hp < p.maxHp * 0.4
+        ? { text: 'Land at your aerodrome and stop to refit — ground crew rearm and repair' } : null);
+      lines.push(p.bombs > 0 && game.mission?.id === 'strafe' ? { text: 'B drops a bomb — release just before the target passes under the nose', once: true } : null);
     }
-
     const wanted = tipsVisible
       ? lines.find((line): line is Candidate => line !== null && !tipsSaid.has(line.text)) ?? null
       : null;
-
     const now = performance.now();
     if (tipLine !== null) {
-      // It goes when it has been read, or the moment it stops being true.
       const read = now - tipShownAt >= TIP_SHOW_MS;
       if (read || wanted === null || wanted.text !== tipLine) {
         if (read) {
@@ -1268,96 +1124,9 @@ function boot(): void {
       tipLine = wanted.text;
       tipShownAt = now;
     }
-
     tips.set('tip', tipLine);
   }
 
-  /**
-   * What the scenic flight is doing, in words.
-   *
-   * The line used to read the same from the moment the wheels left the runway
-   * to the moment they touched it again — "APPROACH · landing at GULF FIELD"
-   * while eleven kilometres from anywhere. The autopilot already knows which
-   * phase it is in and which sight it is heading for, and the ground under the
-   * aircraft is a function call away, so the line can simply say where you are.
-   */
-  function tourNarration(): string {
-    const field = autopilot.destinationName;
-    switch (autopilot.phase) {
-      case 'takeoff':
-      case 'climb':
-        return `Takeoff from ${field}`;
-      case 'approach':
-      case 'final':
-        return `Approach — landing at ${field}`;
-      case 'rollout':
-      case 'done':
-        return `Landed at ${field}`;
-      default:
-        return `Flying over ${overhead()}`;
-    }
-  }
-
-  /**
-   * What is underneath, for the narration.
-   *
-   * The waypoint label says what the leg is *for*, which is the right answer
-   * most of the time — but not while crossing ten kilometres of water to reach
-   * it, so the ground itself gets the first word.
-   */
-  function overhead(): string {
-    const { x, z } = model.position;
-    if (terrainHeight(x, z) < 1) return 'the sea';
-
-    const city = citySites()
-      .find((c) => Math.hypot(x - c.x, z - c.z) < c.radius * 1.3);
-    if (city !== undefined) return 'the city';
-
-    const village = settlements()
-      .some((v) => Math.hypot(x - v.x, z - v.z) < 1500);
-    if (village) return 'a village';
-
-    switch (autopilot.legLabel) {
-      case 'MOUNTAINS': return 'the mountains';
-      case 'SHORELINE': return 'the shoreline';
-      case 'CITY': return 'the city';
-      case 'VILLAGE': return 'a village';
-      case 'HIGH COUNTRY': return 'high country';
-      default: return 'the landscape';
-    }
-  }
-
-  /** Range and relative bearing to the nearest village airstrip. */
-  function airstripCallout(): string | null {
-    const found = nearestAirstrip(model.position.x, model.position.z);
-    if (!found) return null;
-
-    const bearing = Math.atan2(
-      found.strip.x - model.position.x,
-      -(found.strip.z - model.position.z),
-    ) * RAD;
-    const off = angleDelta(model.telemetry.heading, bearing);
-    const km = (found.distance / 1000).toFixed(1);
-
-    if (Math.abs(off) < 8) return `Airstrip ${km} km ahead`;
-    const side = off > 0 ? 'right' : 'left';
-    return `Airstrip ${km} km — turn ${side} ${Math.round(Math.abs(off))}°`;
-  }
-
-  /** Put the aircraft at whatever start point the current world defines. */
-  function spawnHere(): void {
-    const spawn = spawnPoint();
-    START_POSITION.set(spawn.x, 0, spawn.z);
-    model.reset(START_POSITION, spawn.heading);
-  }
-
-  /**
-   * Put the current message in the DOM as well as on the canvas.
-   *
-   * Only the text is mirrored, never the tone: the DOM line exists for the
-   * cinematic view, and a red warning over a shot is exactly the symbology
-   * that view is trying to keep out of frame.
-   */
   function syncNotice(): void {
     const text = message === null ? '' : message.text;
     if (noticeText.textContent !== text) {
@@ -1369,312 +1138,296 @@ function boot(): void {
     }
   }
 
-  /** Show a HUD line that clears itself, for actions with no other feedback. */
   function notify(text: string, sub?: string, seconds = 2.5): void {
-    message = { text, sub, tone: 'info' };
+    message = { text: text.toUpperCase(), sub, tone: 'info' };
     messageTimer = seconds;
   }
 
-  /**
-   * Rebuild the landscape under the aircraft.
-   *
-   * Every route to a new landscape comes through here, so none of them can
-   * forget to preserve the flight:
-   *
-   * - `landscape: 'random'` also draws a new seed. That is N, "take me
-   *   somewhere else entirely".
-   * - A landscape *index* is the World tab's selector: it changes the scenery
-   *   without rerolling it, because picking Fjords means you want to see
-   *   fjords, not a different set of fjords each time you press it.
-   * - No landscape at all reseeds whatever is already selected — the World
-   *   tab's two buttons, which deliberately leave the selector above them
-   *   alone rather than fighting it.
-   *
-   * Airborne, the aircraft keeps its altitude, attitude and speed — only the
-   * ground underneath it changes. The one thing that cannot be kept is being
-   * in clear air: the new height field is generated with no knowledge of where
-   * the aircraft happens to be, so a peak can come up through it. Anything
-   * left below `NEW_WORLD_CLEARANCE` is lifted just clear of the new ground,
-   * which is a smaller lie than spawning inside a mountain.
-   */
-  function newWorld(opts: {
-    landscape?: number | 'random';
-    reseed?: boolean;
-    takeoff?: boolean;
-  } = {}): void {
+  function announceCamera(): void {
+    if (rig.mode === 'free') notify('FREE CAMERA', undefined, 4);
+    else if (rig.mode === 'director') notify('DIRECTOR', undefined, 4);
+    else if (rig.mode === 'cinematic') notify('CINEMATIC', undefined, 4);
+    else if (rig.mode === 'orbit') notify('ORBIT', undefined, 4);
+    else notify(`VIEW  ${cameraMode}`, undefined, 1.6);
+  }
+
+  // --- Worlds and sorties ----------------------------------------------------
+
+  function presetIndex(list: readonly { readonly name: string }[], name: string, fallback = 0): number {
+    const i = list.findIndex((p) => p.name === name);
+    return i >= 0 ? i : fallback;
+  }
+
+  /** Regenerate the front and start whatever was running again on it. */
+  function newWorld(opts: { landscape?: number | 'random'; reseed?: boolean } = {}): void {
     const index = opts.landscape === 'random'
       ? Math.floor(Math.random() * WORLD_PRESETS.length)
       : opts.landscape;
-    const preset = index === undefined
-      ? WORLD_PRESETS[world.worldIndexValue]
-      : world.setWorld(index);
+    const preset = index === undefined ? WORLD_PRESETS[world.worldIndexValue] : world.setWorld(index);
     const seed = opts.reseed ? world.regenerate() : world.seed;
-    status.timeOfDay = world.timeOfDay;
-
-    // On the deck there is no flight worth preserving, and the runway is the
-    // only place guaranteed flat on a landscape nobody has seen yet.
-    if (opts.takeoff || model.telemetry.onGround || model.crashed) {
-      resetFlight();
-    } else {
-      // groundHeight, not terrainHeight: it is the one that knows about roofs
-      // and the carrier deck. Sampling the bare terrain would happily set you
-      // down 400 m up inside a 500 m tower.
-      const ground = groundHeight(model.position.x, model.position.z);
-      if (model.position.y < ground + NEW_WORLD_CLEARANCE) {
-        model.position.y = ground + NEW_WORLD_CLEARANCE;
-        model.prevPosition.copy(model.position);
-        rig.snap(); // the aircraft jumped, so the camera must not chase it there
-      }
-    }
-    world.prime(model.position);
-    notify(`NEW WORLD  ${preset.name}`, `SEED ${String(seed).padStart(6, '0')}`);
+    world.prime(new THREE.Vector3(0, 0, 0));
+    if (game.state === 'attract') game.startAttract();
+    else if (game.mission) startMission(game.mission, false);
+    else if (game.mode) startQuickBattle(false);
+    world.prime(game.player?.position ?? new THREE.Vector3(0, 0, -2000));
+    notify(`FRONT  ${preset.name}`, `SEED ${String(seed).padStart(6, '0')}`);
   }
 
-  /**
-   * What the scenic autopilot needs to know about the world it is touring.
-   *
-   * Assembled fresh each time it is engaged, because every part of it — the
-   * strips, the cities, the ground itself — changes with the world and the
-   * seed. The home field goes first: it is the one runway the terrain
-   * generator guarantees is flat, and the tour lands there.
-   */
-  function tourWorld(): TourWorld {
-    const spawn = spawnPoint();
-    return {
-      ground: groundHeight,
-      terrain: terrainHeight,
-      strips: [
-        {
-          x: 0,
-          z: 0,
-          dirX: Math.sin(spawn.heading * DEG),
-          dirZ: -Math.cos(spawn.heading * DEG),
-          elevation: fieldElevation(),
-          name: `${activeWorld().name} FIELD`,
-        },
-        ...airstrips().map((a, i) => ({ ...a, name: `AIRSTRIP ${i + 1}` })),
-      ],
-      cities: citySites(),
-      villages: settlements(),
-    };
-  }
-
-  /**
-   * Say what the camera just became — and, for the free camera, how to fly it.
-   *
-   * The tip line carries the same thing, but it sits behind the takeoff and
-   * gear prompts in the priority list, so on the runway it is the one place
-   * you would not see it. Arriving in a mode whose controls are undiscoverable
-   * is the moment to say them.
-   */
-  function announceCamera(): void {
-    // Title only. What the mode *is* goes to the tip line, which is legible
-    // over a moving landscape in a way that white text with a shadow is not.
-    if (rig.mode === 'free') notify('FREE CAMERA', undefined, 6);
-    else if (rig.mode === 'director') notify('DIRECTOR', undefined, 6);
-    else if (rig.mode === 'cinematic') notify('CINEMATIC', undefined, 6);
-    else if (rig.mode === 'orbit') notify('ORBIT', undefined, 6);
-    else notify(`VIEW  ${status.cameraMode}`);
-  }
-
-  /** Start or stop the scenic flight. */
-  function toggleTour(): void {
-    if (autopilot.active) {
-      autopilot.disengage();
-      applyTourSpeed();
-      tips.clear();
-      notify('SCENIC FLIGHT OFF', 'you have control');
-      return;
-    }
-    autopilot.maxBankDeg = controls.settings.maxBankDeg;
-    autopilot.engage(tourWorld(), model.position.x, model.position.z, model.telemetry.onGround);
-    controls.setMode('manual', model.telemetry);
-    // How a scenic flight starts: the pace the rest of the sim opens on, and
-    // the ground going by at twice real time. Deliberately not written to disk — this is the flight's own
-    // opening setting, not a preference. Move a slider and *that* is saved, and
-    // a session that never takes a scenic flight keeps whatever pace it had.
-    rig.setDirectorStyle(TOUR_STYLE);
-    tourSpeedIndex = TOUR_SPEED_INDEX;
-    // The whole point is the view, so it starts in the camera that is directing
-    // rather than the one that follows.
-    rig.setMode('cinematic');
-    status.cameraMode = 'CINEMATIC';
-    tourTipIndex = 0;
-    tourTipTimer = 0;
+  /** Common to every way into the air. */
+  function enterFlight(): void {
+    introRunning = false;
+    paused = false;
+    menus.hide();
+    sfx.init();
+    sfx.resume();
+    overlay.classList.remove('choose');
+    overlay.classList.add('hidden');
+    document.body.classList.remove('titles');
+    document.body.classList.add('started');
+    startRadio();
+    loop.start();
+    input.endFrame();
+    tips.clear();
     applyTourSpeed();
-    notify('SCENIC FLIGHT', tourNarration(), 3.5);
     panel.sync();
   }
 
-  function resetFlight(): void {
-    spawnHere();
-    controls.reset();
-    rig.snap(); // the aircraft jumps, so the camera must not interpolate there
-    tips.clear();
-    message = null;
-    crashTimer = 0;
-    messageTimer = 0;
+  function startQuickBattle(fresh = true): void {
+    if (fresh) {
+      world.setTimeOfDay(presetIndex(TIME_PRESETS, 'MORNING', 1));
+      world.prime(new THREE.Vector3(0, 0, 0));
+    }
+    game.setAutopilot(false);
+    game.startQuickBattle(menus.team, menus.aircraft);
+    if (rig.mode === 'cinematic' || rig.mode === 'director') rig.setMode('chase');
+    cameraMode = rig.mode.toUpperCase();
+    world.prime(game.player?.position ?? new THREE.Vector3());
+    enterFlight();
+  }
+
+  function startMission(m: MissionInfo, fresh = true): void {
+    if (fresh) {
+      world.setWorld(presetIndex(WORLD_PRESETS, m.world));
+      world.regenerate(m.seed);
+      world.setTimeOfDay(presetIndex(TIME_PRESETS, m.time, 1));
+      world.setWeather(presetIndex(WEATHER_PRESETS, m.weather, 0));
+      if (m.season) world.setSeason(presetIndex(SEASON_PRESETS, m.season, 1));
+      world.prime(new THREE.Vector3(0, 0, 0));
+    }
+    game.setAutopilot(false);
+    game.startMission(m, menus.team, menus.aircraft);
+    if (rig.mode === 'cinematic' || rig.mode === 'director') rig.setMode('chase');
+    cameraMode = rig.mode.toUpperCase();
+    world.prime(game.player?.position ?? new THREE.Vector3());
+    enterFlight();
+  }
+
+  /** Watch from the main menu: a quick battle flown by the autopilot. */
+  function startWatch(): void {
+    world.setTimeOfDay(presetIndex(TIME_PRESETS, 'GOLDEN', 3));
+    world.prime(new THREE.Vector3(0, 0, 0));
+    game.startQuickBattle(menus.team, menus.aircraft);
+    game.setAutopilot(true);
+    rig.setDirectorStyle(1);
+    rig.setMode('cinematic');
+    cameraMode = 'CINEMATIC';
+    world.prime(game.player?.position ?? new THREE.Vector3());
+    enterFlight();
+    notify('WATCHING', 'any stick input takes the controls', 3.5);
+  }
+
+  function toggleTour(): void {
+    if (game.state !== 'playing') return;
+    if (game.autopilot) {
+      game.setAutopilot(false);
+      applyTourSpeed();
+      tips.clear();
+      if (rig.mode === 'cinematic') rig.setMode('chase');
+      cameraMode = rig.mode.toUpperCase();
+      notify('YOU HAVE CONTROL', undefined, 2.2);
+      panel.sync();
+      return;
+    }
+    game.setAutopilot(true);
+    rig.setDirectorStyle(1);
+    rig.setMode('cinematic');
+    cameraMode = 'CINEMATIC';
+    applyTourSpeed();
+    notify('WATCHING', 'the autopilot is fighting', 3);
+    panel.sync();
+  }
+
+  function quitToMenu(): void {
+    paused = false;
+    menus.hide();
+    game.startAttract();
+    rig.setMode('cinematic');
+    applyTourSpeed();
+    introRunning = true;
+    world.setTimeOfDay(presetIndex(TIME_PRESETS, 'GOLDEN', 3));
+    overlay.classList.remove('hidden', 'full', 'ready');
+    overlay.classList.add('choose');
+    document.body.classList.remove('started');
+    hud.clear();
+    panel.sync();
+  }
+
+  function restart(): void {
+    if (game.mission) startMission(game.mission, false);
+    else startQuickBattle(false);
+  }
+
+  function pause(on: boolean): void {
+    if (game.state === 'attract' || introRunning) return;
+    paused = on;
+    if (on) {
+      sfx.suspend();
+      input.releaseMouseControl();
+      showMenusCursor();
+      menus.showPause(game.mission !== null);
+    } else {
+      sfx.resume();
+      menus.hide();
+    }
+  }
+
+  function showMenusCursor(): void {
+    input.releaseMouseControl();
+    game.mouseFire = false;
+  }
+
+  const menus = new Menus({
+    quickBattle: () => startQuickBattle(),
+    watch: () => startWatch(),
+    fly: (m) => startMission(m),
+    resume: () => pause(false),
+    restart: () => restart(),
+    quit: () => quitToMenu(),
+    help: () => {
+      menus.hide();
+      showHelp();
+    },
+    select: () => {
+      sfx.init();
+      sfx.ui('select');
+    },
+  });
+
+  // Fire with the left mouse button — except where dragging moves the camera.
+  sceneCanvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || game.state !== 'playing' || paused) return;
+    if (input.usingMouse || (rig.mode !== 'free' && rig.mode !== 'director' && rig.mode !== 'orbit')) {
+      game.mouseFire = true;
+    }
+  });
+  window.addEventListener('pointerup', (e) => {
+    if (e.button === 0) game.mouseFire = false;
+  });
+  window.addEventListener('blur', () => {
+    game.mouseFire = false;
+    if (game.state === 'playing' && !paused && !game.autopilot) pause(true);
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && game.state === 'playing' && !paused && !game.autopilot) pause(true);
+  });
+
+  // Gamepad buttons the stick input doesn't cover: triggers fire and bomb,
+  // face buttons for camera and target, Start pauses.
+  const padPrev: boolean[] = [];
+  function readPad(): void {
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    let fire = false;
+    for (const gp of pads) {
+      if (!gp || !gp.connected) continue;
+      const pressed = (i: number): boolean => (gp.buttons[i]?.value ?? 0) > 0.35 || (gp.buttons[i]?.pressed ?? false);
+      const edge = (i: number): boolean => {
+        const now = pressed(i);
+        const was = padPrev[i] ?? false;
+        padPrev[i] = now;
+        return now && !was;
+      };
+      fire = pressed(7);
+      if (edge(6)) game.dropBomb();
+      if (edge(3)) {
+        cameraMode = rig.cycle().toUpperCase();
+        announceCamera();
+      }
+      if (edge(2)) game.cycleTarget();
+      if (edge(9)) pause(!paused);
+      break;
+    }
+    game.padFire = fire;
   }
 
   function fixedUpdate(dt: number): void {
     if (paused) return;
     input.update();
-
-    // Three sources of stick input, in order of who has control: the attract
-    // flight, the scenic autopilot, and the pilot.
-    let stick: StickInput = input;
-    if (introRunning) {
-      // Hands-off, and a key pressed while the title is still up must not
-      // nudge it off its track.
-      stick = IDLE_STICK;
-    } else if (autopilot.active) {
-      // Touching a *flight* control takes over — but changing the time of day,
-      // the weather or the camera does not, because those are exactly what the
-      // pilot is invited to do while it flies.
+    let stick: Input | null = introRunning || game.state !== 'playing' ? null : input;
+    if (stick && game.autopilot) {
       if (Math.abs(input.pitch) > 0.15 || Math.abs(input.roll) > 0.15
         || Math.abs(input.yaw) > 0.15 || Math.abs(input.throttleAxis) > 0.15) {
-        autopilot.disengage();
-        applyTourSpeed();
-        tips.clear();
-        notify('SCENIC FLIGHT OFF', 'you have control');
+        toggleTour();
       } else {
-        autopilot.update(dt, model.telemetry, model.position.x, model.position.z);
-        controls.gearDown = autopilot.wantsGearDown(model.telemetry);
-        stick = autopilot.stick;
+        stick = null;
       }
     }
+    game.fixedUpdate(dt, stick);
+  }
 
-    controls.update(dt, stick, model.telemetry);
-    model.step(dt, controls);
-
-    if (autopilot.active && autopilot.phase === 'done') {
-      autopilot.disengage();
-      applyTourSpeed();
-      tips.clear();
-      notify('TOUR COMPLETE', 'setting off somewhere new', 4);
-      // Let the landing be seen before the world changes underneath it.
-      nextTourIn = LANDED_PAUSE;
+  const lighting = {
+    sun: new THREE.Color(),
+    sky: new THREE.Color(),
+    sunDir: new THREE.Vector3(),
+    fogColor: new THREE.Color(),
+    fogDensity: 1.85e-5,
+  };
+  function updateLighting(): void {
+    const sunLight = world.sunLight;
+    lighting.sun.copy(sunLight.color).multiplyScalar(sunLight.intensity * 0.55);
+    lighting.sunDir.copy(world.sun).normalize();
+    const fog = engine.scene.fog as THREE.FogExp2 | null;
+    if (fog) {
+      lighting.fogColor.copy(fog.color);
+      lighting.fogDensity = fog.density;
+      // Sky fill: the horizon colour, a touch brighter, is what lights smoke from the side.
+      lighting.sky.copy(fog.color).multiplyScalar(0.55 + 0.35 * Math.max(0, lighting.sunDir.y));
     }
+    game.battle.fx.setLighting(lighting);
   }
 
-  /**
-   * Put the aircraft into a hands-off cruise somewhere over the current world,
-   * for the title screen to play behind.
-   *
-   * The altitude comes from the highest ground along the next 60 km of track
-   * rather than from a fixed number: cruise holds whatever altitude it starts
-   * at, and a fixed one flies into the Himalaya within a minute.
-   */
-  function launchIntro(): void {
-    const heading = Math.random() * 360;
-    const dirX = Math.sin(heading * DEG);
-    const dirZ = -Math.cos(heading * DEG);
-    const x = (Math.random() - 0.5) * 26000;
-    const z = (Math.random() - 0.5) * 26000;
-
-    let peak = -Infinity;
-    for (let d = 0; d <= 60000; d += 1200) {
-      peak = Math.max(peak, terrainHeight(x + dirX * d, z + dirZ * d));
-    }
-
-    START_POSITION.set(x, 0, z);
-    model.reset(START_POSITION, heading);
-    model.position.y = peak + INTRO_CLEARANCE;
-    model.velocity.set(dirX * INTRO_SPEED, 0, dirZ * INTRO_SPEED);
-    model.telemetry.onGround = false;
-    model.prevPosition.copy(model.position);
-
-    controls.reset();
-    controls.gearDown = false;
-    controls.gearExtension = 0;
-    controls.throttle = 0.72;
-    // Telemetry only exists after a step, and cruise captures its hold altitude
-    // from it — so step once before asking for the mode.
-    model.step(1 / PHYSICS_HZ, controls);
-    controls.setMode('cruise', model.telemetry);
-
-    rig.setMode('cinematic');
-    rig.snap();
-    world.prime(model.position);
-  }
-
-  /**
-   * The light everything opens in.
-   *
-   * A low sun across the landscape is the best this renderer looks, and it is
-   * the one preset that reads well under the white titles as well — dawn and
-   * dusk are prettier still to fly in and hopeless to put text over. Found by
-   * name rather than written as an index so re-ordering the presets cannot
-   * quietly change what the sim opens on.
-   */
-  const GOLDEN_HOUR = Math.max(0, TIME_PRESETS.findIndex((p) => p.name === 'GOLDEN'));
-
-  /** Choose a fresh world and seed, then start the attract flight over it. */
-  function beginIntro(): void {
-    world.setWorld(Math.floor(Math.random() * WORLD_PRESETS.length));
-    world.regenerate();
-    world.setTimeOfDay(GOLDEN_HOUR);
-    status.timeOfDay = world.timeOfDay;
-    launchIntro();
-    panel.sync();
-  }
-
-  function render(alpha: number, dt: number): void {
-    // --- Discrete actions: once per frame, never per physics substep. --------
+  const _look = new THREE.Vector3();
+  function render(alpha: number, frameDt: number): void {
+    const dt = paused ? 0 : frameDt;
     let settingsChanged = false;
-    // Hotkeys belong to the game, not to the screens in front of it — the
-    // camera is the director's while the attract flight runs, and Manual now
-    // puts the aircraft on its runway *before* the key list is dismissed, so
-    // the overlay being up is its own reason to swallow the frame's input.
-    if (introRunning || !overlay.classList.contains('hidden')) input.endFrame();
+    const menuUp = !overlay.classList.contains('hidden') || menus.isOpen;
+    if (menuUp && !paused) input.endFrame();
+    readPad();
     if (input.wasPressed('KeyC')) {
-      status.cameraMode = rig.cycle().toUpperCase();
+      cameraMode = rig.cycle().toUpperCase();
       announceCamera();
-      tourUsed.add('C');
       settingsChanged = true;
     }
-    if (input.wasPressed('KeyG')) {
-      controls.assists = !controls.assists;
-      status.assists = controls.assists;
-      settingsChanged = true;
-    }
-    if (input.wasPressed('KeyL')) controls.gearDown = !controls.gearDown;
-    if (input.wasPressed('KeyT')) {
-      status.timeOfDay = world.cycleTimeOfDay(1);
-      notify(`TIME  ${status.timeOfDay}`);
-      tourUsed.add('T');
+    if (input.wasPressed('KeyT')) game.cycleTarget();
+    if (input.wasPressed('KeyB')) game.dropBomb();
+    if (input.wasPressed('KeyY')) {
+      notify(`TIME  ${world.cycleTimeOfDay(1)}`);
       settingsChanged = true;
     }
     if (input.wasPressed('KeyR')) {
       notify(`WEATHER  ${world.cycleWeather(1)}`);
-      tourUsed.add('R');
       settingsChanged = true;
     }
-    if (nextTourIn > 0) {
-      nextTourIn -= dt;
-      if (nextTourIn <= 0) {
-        nextTourIn = 0;
-        newWorld({ landscape: 'random', reseed: true, takeoff: true });
-        toggleTour();
-      }
+    if (input.wasPressed('Tab')) {
+      showMap = !showMap;
+      notify(showMap ? 'MAP ON' : 'MAP OFF', undefined, 1.2);
+      settingsChanged = true;
     }
-    // Any of these means the pilot has taken over — drop the pending departure.
-    if (input.wasPressed('KeyF') || input.wasPressed('Backspace')) nextTourIn = 0;
-    // The free camera reads the mouse directly. It is taken every frame rather
-    // than only in free mode so a drag made in another view does not queue up
-    // and fire the moment you switch.
+
     const gesture = input.takeCameraGesture();
     if (rig.mode === 'director') {
-      // The director keeps choosing and cutting; these reshape whatever it is
-      // playing, and the change sticks to that shot for next time it comes up.
       if (gesture.dx !== 0 || gesture.dy !== 0 || gesture.wheel !== 0) {
         rig.adjustShot(gesture.dx, gesture.dy, gesture.wheel);
       }
-      // `,` and `.`: the step-back/step-forward pair from every video editor,
-      // unshifted, adjacent, and in the same physical place on US, UK and
-      // Nordic layouts. `[` `]` are kept because they were the original
-      // binding, but they are not advertised — on a Nordic keyboard those two
-      // key positions print `å` and `¨`, so the hint was a lie.
       if (input.wasPressed('Comma') || input.wasPressed('BracketLeft')) rig.stepShot(-1);
       if (input.wasPressed('Period') || input.wasPressed('BracketRight')) rig.stepShot(1);
       if (input.wasPressed('KeyX')) {
@@ -1684,8 +1437,6 @@ function boot(): void {
         rig.resetShot();
         notify('SHOT RESET', undefined, 1.6);
       }
-      // 1-9 are the saved setups, shift saves. (The free camera's saved views
-      // stop at 8, which is as many as it has.)
       const savingShot = input.isDown('ShiftLeft') || input.isDown('ShiftRight');
       for (let slot = 0; slot < 9; slot++) {
         if (!input.wasPressed(`Digit${slot + 1}`)) continue;
@@ -1706,10 +1457,7 @@ function boot(): void {
       }
     }
     if (rig.mode === 'orbit' && rig.moveOrbitCamera(gesture.dy, gesture.wheel)) {
-      // The bar states these in metres, so it has to follow the hand.
       syncOrbit();
-      // A drag is hundreds of these frames; the write is left to settle, the
-      // same reasoning as the sliders saving on `change` rather than on `input`.
       orbitSaveDue = performance.now() + ORBIT_SAVE_DELAY_MS;
     }
     if (orbitSaveDue !== 0 && performance.now() >= orbitSaveDue) {
@@ -1718,14 +1466,9 @@ function boot(): void {
     }
     if (rig.mode === 'free') {
       rig.moveFreeCamera(gesture.dx, gesture.dy, gesture.wheel, gesture.pan);
-      // 1-9 recall a saved view; shift saves the current one over it. The nine
-      // start out as a spread worth having, so the "presets" and the "saves"
-      // are the same nine slots rather than two competing sets.
       const saving = input.isDown('ShiftLeft') || input.isDown('ShiftRight');
       for (let slot = 0; slot < rig.freeViewCount; slot++) {
         if (!input.wasPressed(`Digit${slot + 1}`)) continue;
-        // Both routes leave the same slot picked, so the bar never disagrees
-        // with the keyboard about which view Save would write to.
         pickedView = slot;
         if (saving) {
           rig.storeFreeView(slot);
@@ -1742,107 +1485,98 @@ function boot(): void {
         syncFree();
       }
     }
-
-    if (input.wasPressed('KeyF')) toggleTour();
-    if (autopilot.active) {
-      tourTipTimer += dt;
-      if (tourTipTimer > TOUR_TIP_SECONDS) {
-        tourTipTimer = 0;
-        tourTipIndex += 1;
+    // Number keys set the throttle wherever they aren't already camera slots.
+    if (rig.mode !== 'director' && rig.mode !== 'free' && game.state === 'playing') {
+      for (let d = 0; d <= 9; d++) {
+        if (input.wasPressed(`Digit${d}`)) game.setThrottle(d === 0 ? 1 : d / 10);
       }
     }
-    if (input.wasPressed('KeyN')) {
+    if (input.wasPressed('KeyF')) toggleTour();
+    if (input.wasPressed('KeyN') && (game.state === 'attract' || !game.mission)) {
       newWorld({ landscape: 'random', reseed: true });
       settingsChanged = true;
     }
-    // Hotkeys can change the same state the panel shows, so keep it in step.
     if (settingsChanged) panel.sync();
-    if (input.wasPressed('Space')) {
-      tourUsed.add('SPACE');
-      panel.toggleStyle();
-    }
-    if (input.wasPressed('Backspace')) resetFlight();
-    if (input.wasPressed('KeyP')) paused = !paused;
+    if (input.wasPressed('KeyO')) panel.toggleStyle();
+    if (input.wasPressed('KeyP')) pause(!paused);
     if (input.wasPressed('KeyH')) toggleHelp();
     if (input.wasPressed('KeyM')) {
       if (input.usingMouse) input.releaseMouseControl();
-      else input.requestMouseControl();
+      else if (game.state === 'playing') input.requestMouseControl();
     }
-    // Escape closes the shot picker before it reaches for the help screen —
-    // dismissing the thing that is open is what the key is for.
     if (input.wasPressed('Escape')) {
       if (!shotMenu.hidden) showShotMenu(false);
       else if (!shotKeys.hidden) showShotKeys(false);
       else if (!shotShape.hidden) showShotShape(false);
-      else showHelp();
+      else if (menus.openScreen === 'pause') pause(false);
+      else if (menus.isOpen && menus.openScreen !== 'report') menus.hide();
+      else if (game.state === 'playing') pause(!paused);
     }
 
-    // The attract flight can still fly into a ridge on a bad draw; put it back
-    // in the air rather than showing a crash message over the title.
-    if (introRunning && model.crashed) launchIntro();
-
-    // --- Crash: show the impact speed, then put the aircraft back. ----------
-    if (!introRunning && model.crashed && crashTimer === 0) {
-      message = { text: `CRASHED  ${Math.round(model.crashSpeed * MS_TO_KT)} KT`, tone: 'warn' };
-      crashTimer = 3;
-      messageTimer = 0; // the crash owns the line until the reset clears it
-    }
-    if (crashTimer > 0) {
-      crashTimer -= dt;
-      if (crashTimer <= 0) resetFlight();
-    }
     if (messageTimer > 0) {
-      messageTimer -= dt;
+      messageTimer -= frameDt;
       if (messageTimer <= 0) message = null;
     }
 
-    // --- Pose interpolation between the last two physics states. -------------
-    renderPosition.lerpVectors(model.prevPosition, model.position, alpha);
-    renderQuaternion.slerpQuaternions(model.prevOrientation, model.orientation, alpha);
-    aircraft.setPose(renderPosition, renderQuaternion);
-
-    aircraft.update(dt, controls, model.telemetry);
-    world.update(dt, renderPosition);
-    // A running day changes the readout and the clock slider under the pilot.
-    // Only while it is actually running: `sync` walks every control the open
-    // panel built, which is wasted work sixty times a second for a sun that is
-    // not moving.
-    if (world.driftIndexValue > 0) {
-      status.timeOfDay = world.timeOfDay;
-      if (panel.isOpen) panel.sync();
+    // The game, then the pictures.
+    if (!paused) game.frame(dt);
+    const battle = game.battle;
+    battle.ear.copy(engine.camera.position);
+    battle.render(alpha, dt, engine.camera);
+    const subj = game.subject;
+    if (subj !== subject) {
+      if (subject) subject.setCockpitVisible(false);
+      subject = subj;
+      rig.snap();
     }
+    const focus = subject ? subject.root.position : subjectPos.set(0, 600, -2000);
+    subjectPos.copy(focus);
+    world.update(dt, subjectPos);
+    updateLighting();
+    if (world.driftIndexValue > 0 && panel.isOpen) panel.sync();
 
-    // What the director frames against: the light, the nearest thing worth
-    // putting behind the aircraft, and how much room there is underneath.
-    // `world.sun` is the direction; `sunLight.position` is a *place* that
-    // follows the aircraft so the shadow frustum stays with it. Normalising the
-    // latter gives a "sun direction" dominated by where the aircraft happens to
-    // be, and the backlit shots pointed at nothing.
-    sunDirection.copy(world.sun).normalize();
-    rig.setDirectorContext(sunDirection, nearestLandmark(renderPosition),
-      nearestStructure(renderPosition), model.telemetry.agl);
-    rig.update(dt, aircraft, model.telemetry);
-
-    // Events are what a director cuts *to*. The timer handles cruising; these
-    // handle the moments.
-    const airborne = !model.telemetry.onGround;
+    // Camera: what's being fought, who's behind, and whose seat we're in.
+    const subjectPlane = game.state === 'attract' ? null : game.player;
+    const target = game.target;
+    const threat = game.threat();
+    rig.setCombatContext({
+      target: target && target.alive
+        ? { position: target.position, velocity: target.velocity, cameraScale: battle.visualOf(target)?.cameraScale }
+        : null,
+      threat: threat ? { position: threat.position } : null,
+    });
+    rig.setGunfire(Boolean(subjectPlane?.input.fire && subjectPlane.gun.jam <= 0 && subjectPlane.gun.ammo > 0));
+    // V: look at the target from the cockpit.
+    if (rig.mode === 'cockpit' && subjectPlane && target && input.isDown('KeyV')) {
+      _look.subVectors(target.position, subjectPlane.position).applyQuaternion(subjectPlane.invQ);
+      rig.setCockpitLook(Math.atan2(-_look.x, -_look.z), Math.atan2(_look.y, Math.hypot(_look.x, _look.z)));
+    } else {
+      rig.setCockpitLook(0, 0);
+    }
+    const telemetrySource = game.state === 'attract'
+      ? game.battle.planes.find((p) => battle.visualOf(p) === subject) ?? null
+      : game.player;
+    if (subject && telemetrySource) {
+      rig.setDirectorContext(sunDirection.copy(world.sun).normalize(), nearestLandmark(subjectPos),
+        nearestStructure(subjectPos), telemetrySource.telemetry.agl);
+      rig.update(dt, subject, telemetrySource.telemetry);
+    }
+    const airborne = telemetrySource ? !telemetrySource.telemetry.onGround : true;
     if (airborne !== wasAirborne) {
       rig.requestShot(airborne ? 'takeoff' : 'landing');
       wasAirborne = airborne;
     }
 
-    // Focus on the aircraft: the director always knows where the subject is, so
-    // the lens never has to hunt for it, and a rack focus is this number moving.
+    // Sound follows the camera.
+    listenerVel.copy(telemetrySource?.velocity ?? listenerVel.set(0, 0, 0));
+    sfx.setListener(engine.camera.position, engine.camera.quaternion, listenerVel, rig.mode === 'cockpit');
+    sfx.update(frameDt);
+
     const lens = rig.lens;
-    const subject = engine.camera.position.distanceTo(renderPosition);
-    engine.setFocus(subject * lens.focusScale, dofOverride ?? lens.aperture);
+    const dist = engine.camera.position.distanceTo(subjectPos);
+    engine.setFocus(dist * lens.focusScale, dofOverride ?? lens.aperture);
+    engine.render(frameDt);
 
-    engine.render(dt);
-
-    // Straight after the draw, in the same task: without `preserveDrawingBuffer`
-    // the buffer is cleared before anything else gets a look at it, and asking
-    // a frame later gives a blank image. Costing every frame a preserved buffer
-    // to make one screenshot cheap is the wrong way round.
     if (pendingShot) {
       pendingShot = false;
       sceneCanvas.toBlob((blob) => {
@@ -1851,52 +1585,24 @@ function boot(): void {
       notify('SCREENSHOT SAVED', undefined, 2);
     }
 
-    // The cinematic view is a camera, not a cockpit: symbology over it breaks
-    // the shot. Hiding the canvas also stops the last frame's HUD lingering.
     const cinematic = rig.mode === 'cinematic';
-    // Symbology over a shot breaks it, and on a scenic flight every camera is
-    // a shot: the aeroplane is being flown for you, so there is no instrument
-    // on the glass anyone is reading, whichever view it is watched from. This
-    // used to name the director specifically, which left the tapes sitting over
-    // the chase, cockpit, orbit and free views for the whole of a tour. Hand
-    // flying gets its meters back the moment the autopilot is off.
-    const bareView = cinematic || (autopilot.active && !introRunning);
+    // The symbology belongs to a pilot. Watching, or on the title screen, there is none.
+    const bareView = cinematic || game.autopilot || introRunning || game.state !== 'playing';
     hudCanvas.style.display = bareView ? 'none' : '';
-    // The message line is painted on that canvas, so it needs the DOM copy
-    // wherever the canvas is gone — not only in the cinematic view.
     document.body.classList.toggle('no-hud', bareView);
     document.body.classList.toggle('cinematic', cinematic);
-    // The bar is only useful where there is a shot to step, and the title
-    // screen has its own camera.
     if (cinematic && !introRunning) syncPace();
-    // The rate belongs to the flight, not to a camera: it shows on the bar in
-    // whichever of the two modes the bar is up.
-    document.body.classList.toggle('touring', autopilot.active && !introRunning);
-    if (autopilot.active) syncTourSpeed();
-    // The orbit and free views borrow the same bar; the title screen has its
-    // own camera and no business showing either.
+    document.body.classList.toggle('touring', game.autopilot && !introRunning);
+    if (game.autopilot) syncTourSpeed();
     document.body.classList.toggle('orbit', rig.mode === 'orbit' && !introRunning);
     document.body.classList.toggle('free', rig.mode === 'free' && !introRunning);
     const directing = rig.mode === 'director' && !introRunning;
     const shaping = directing || (cinematic && !introRunning);
     document.body.classList.toggle('director', directing);
-    // The gesture hint runs from the moment the director is entered, and starts
-    // again if you leave and come back — which is when you would want reminding.
     if (rig.mode !== lastCameraMode) {
       lastCameraMode = rig.mode;
       if (CAMERA_TIPS[rig.mode] !== undefined) {
         cameraTipUntil = performance.now() + CAMERA_TIP_MS;
-        // Skip the rest period. Tips are on a duty cycle so the interface stays
-        // quiet, but arriving in a mode whose whole point needs explaining is
-        // the one moment worth interrupting for — and the wait was up to 26 s,
-        // by which time you have either worked it out or given up. This applies
-        // to every mode that has a line to say now, not only the director.
-        //
-        // Backdated, not zeroed. `performance.now()` counts from page load, so
-        // zero is "long ago" only once the page has been open longer than the
-        // rest period — and reaching the director inside the first half minute
-        // is the normal case, not the edge one. Zeroing it held the tip back by
-        // however much of those 26 seconds the page had not yet lived through.
         tipHiddenAt = performance.now() - TIP_REST_MS;
         tipLine = null;
       }
@@ -1908,15 +1614,10 @@ function boot(): void {
       if (!shotKeys.hidden) showShotKeys(false);
     }
     if (!shaping && !shotShape.hidden) showShotShape(false);
-    // The panel is shared between the two modes and says different things in
-    // each, so it has to be redrawn when the camera changes under it.
     if (!shotShape.hidden && rig.mode !== lastShapeMode) {
       lastShapeMode = rig.mode;
       syncShape();
     }
-    // The reel can advance to an entry whose *shot* has not changed — the same
-    // setup saved twice, framed differently — and then the panel's position
-    // readout would sit a cut behind the bar's.
     const reelAt = rig.reelPlaying ? rig.reelPosition : '';
     if (!shotShape.hidden && reelAt !== lastReelPosition) {
       lastReelPosition = reelAt;
@@ -1926,16 +1627,9 @@ function boot(): void {
     if (shot !== null && shotLabel.textContent !== shot) shotLabel.textContent = shot;
     if (shot !== null && shotNameText.textContent !== shot) {
       shotNameText.textContent = shot;
-      // The director cuts while the picker is open, so the highlight has to
-      // follow it rather than only move when something is chosen.
       for (const [name, entry] of menuEntries) entry.classList.toggle('current', name === shot);
-      // Same for the sliders: they belong to the shot that is playing, and it
-      // changes on its own clock.
       if (!shotShape.hidden) syncShape();
     }
-    // Auto / Pinned / a reel position: three things the sequence can be doing,
-    // and the bar has to say which. Leaving it on AUTO while a reel played was
-    // the one reading that is simply untrue.
     const pinned = directing && rig.shotPinned;
     const reel = directing && rig.reelPlaying ? `Reel ${rig.reelPosition}` : '';
     const wanted = reel !== '' ? reel : pinned ? 'Pinned' : 'Auto';
@@ -1943,19 +1637,28 @@ function boot(): void {
       pinLabel.textContent = wanted;
       pinButton.setAttribute('aria-pressed', String(pinned || reel !== ''));
     }
-    // The shot name is for the camera mode, not for the title card.
     shotLabel.style.display = introRunning ? 'none' : '';
 
-    status.paused = paused;
-    status.message = message;
-    status.fps = loop.fps;
-    status.frameMs = loop.frameMs;
-    if (!cinematic) {
-      hud.draw(model.telemetry, controls, engine.camera, renderPosition, model.velocity, status);
+    if (!bareView) {
+      const m = game.mode;
+      hud.draw({
+        battle,
+        player: game.player,
+        camera: engine.camera,
+        target: game.target,
+        targetLocked: game.targetLocked,
+        title: m?.title ?? '',
+        score: m?.score ?? 0,
+        lives: m?.lives ?? 0,
+        objectives: m?.objectives ?? [],
+        mouseStick: input.usingMouse ? { active: true, x: input.roll, y: input.pitch } : null,
+        cockpit: rig.mode === 'cockpit',
+        showMap,
+        time: performance.now() / 1000,
+      }, frameDt);
     }
     syncNotice();
     if (!introRunning) updateTips();
-
     input.endFrame();
   }
 
@@ -1964,7 +1667,7 @@ function boot(): void {
 
   const panel = new Panel({
     toggleTour,
-    touring: () => autopilot.active,
+    touring: () => game.autopilot,
     getTipsVisible: () => tipsVisible,
     setTipsVisible: (on: boolean) => {
       tipsVisible = on;
@@ -1982,92 +1685,65 @@ function boot(): void {
       applyTourSpeed();
     },
     newWorld: () => newWorld({ reseed: true }),
-    newWorldTakeoff: () => newWorld({ reseed: true, takeoff: true }),
+    newWorldTakeoff: () => newWorld({ reseed: true }),
     currentSeed: () => world.seed,
-
     timeOptions: TIME_PRESETS.map((p) => p.name),
     weatherOptions: WEATHER_PRESETS.map((p) => p.name),
     seasonOptions: SEASON_PRESETS.map((p) => p.name),
     cameraOptions: CAMERA_MODES.map((m) => m.toUpperCase()),
     qualityOptions: QUALITY_PRESETS.map((q) => q.name),
     worldOptions: WORLD_PRESETS.map((w) => w.name),
-
     getWorld: () => world.worldIndexValue,
-    // Picking a landscape mid-flight used to drop the aircraft back on the
-    // runway. It goes through the same path as everything else now, so the
-    // flight carries over and only the ground beneath it changes.
     setWorld: (i) => newWorld({ landscape: i }),
     worldBlurb: () => world.worldBlurb,
-
     getQuality: () => qualityIndex,
     setQuality: (i) => {
       qualityIndex = clamp(Math.round(i), 0, QUALITY_PRESETS.length - 1);
       applyQuality();
     },
-
     driftOptions: DRIFT_RATES.map((r) => r.name),
     getClock: () => world.clockHours,
-    setClock: (h) => {
-      world.setClock(h);
-      status.timeOfDay = world.timeOfDay;
-    },
+    setClock: (h) => world.setClock(h),
     clockLabel: () => world.clockLabel,
     getDrift: () => world.driftIndexValue,
     setDrift: (i) => world.setDrift(i),
-
     getTime: () => world.timeIndexValue,
-    setTime: (i) => {
-      world.setTimeOfDay(i);
-      status.timeOfDay = world.timeOfDay;
-    },
+    setTime: (i) => world.setTimeOfDay(i),
     getWeather: () => world.weatherIndexValue,
     setWeather: (i) => world.setWeather(i),
     getSeason: () => world.seasonIndexValue,
     setSeason: (i) => world.setSeason(i),
-
     getCamera: () => CAMERA_MODES.indexOf(rig.mode),
     setCamera: (i) => {
       rig.setMode(CAMERA_MODES[i]);
-      status.cameraMode = rig.mode.toUpperCase();
+      cameraMode = rig.mode.toUpperCase();
       announceCamera();
     },
     getFov: () => rig.fieldOfView,
     setFov: (deg) => rig.setFieldOfView(deg),
-
-    getMode: () => controls.mode,
-    setMode: (mode: FlightMode) => {
-      controls.setMode(mode, model.telemetry);
-      status.flightMode = mode.toUpperCase();
-      status.assists = controls.assists;
+    getInvert: () => game.pilot.invertPitch,
+    setInvert: (on) => {
+      game.pilot.invertPitch = on;
     },
-    getCentreHud: () => hud.showCentreSymbology,
-    setCentreHud: (on) => {
-      hud.showCentreSymbology = on;
+    getAutoRudder: () => game.pilot.autoRudder,
+    setAutoRudder: (on) => {
+      game.pilot.autoRudder = on;
+    },
+    getMap: () => showMap,
+    setMap: (on) => {
+      showMap = on;
     },
     showKeyControls: () => showHelp(),
-
-    getAssists: () => controls.assists,
-    setAssists: (on) => {
-      controls.assists = on;
-      status.assists = on;
-    },
-
-    getSensitivity: (axis) => controls.settings[sensitivityKey(axis)],
+    getSensitivity: (axis) => game.pilot[sensitivityKey(axis)],
     setSensitivity: (axis, value) => {
-      controls.settings[sensitivityKey(axis)] = value;
+      game.pilot[sensitivityKey(axis)] = value;
     },
-    getMaxBank: () => controls.settings.maxBankDeg,
-    setMaxBank: (deg) => {
-      controls.settings.maxBankDeg = deg;
-    },
-
     resetControls: () => {
-      Object.assign(controls.settings, DEFAULT_SETTINGS);
-      status.assists = controls.assists;
-      status.flightMode = controls.mode.toUpperCase();
-      rig.setFieldOfView(58);
+      Object.assign(game.pilot, DEFAULT_PILOT);
+      rig.setFieldOfView(60);
     },
   });
+
 
   // --------------------------------------------------- idle, in fullscreen
   //
@@ -2251,122 +1927,77 @@ function boot(): void {
   syncOrbit();
   markSlots();
   syncShape();
-  beginIntro();
 
-  // Dev-only handle for driving the sim from the console during development.
+  // The title screen: a dogfight near the home field, filmed by the director.
+  world.setTimeOfDay(Math.max(0, TIME_PRESETS.findIndex((p) => p.name === 'GOLDEN')));
+  world.prime(new THREE.Vector3(0, 0, -2000));
+  game.startAttract();
+  rig.setMode('cinematic');
+
+  // Dev-only handle for driving the game from the console during development.
   // Stripped from the production bundle by the `import.meta.env.DEV` guard.
   if (import.meta.env.DEV) {
     Object.assign(window, {
       sim: {
-        model, controls, aircraft, rig, world, engine, input, loop, status,
-        resetFlight, terrainHeight, groundHeight, hud, tips, panel,
-        settlements, airstrips, nearestAirstrip, pyramids, autopilot, toggleTour, tourWorld,
+        game, battle: game.battle, rig, world, engine, input, loop, hud, tips, panel, menus, sfx,
+        terrainHeight, groundHeight, settlements, structures, toggleTour,
+        startQuickBattle, startMission, startWatch, quitToMenu, pause,
         setDof: (a: number | null) => { dofOverride = a; },
         setDepthDebug: (on: boolean) => engine.setDepthDebug(on),
         setTourSpeed: (i: number) => { tourSpeedIndex = i; applyTourSpeed(); },
-        citySites,
-        boats,
-        structures,
-        balloons,
-        setSpin: (t: number) => { turbineSpin.value = t; },
-        setDrift: (t: number) => { balloonDrift.value = t; },
-        setTrailTime: (t: number) => { contrailTime.value = t; },
-        fogCover, FOG_GLSL, THREE,
+        THREE,
       },
     });
   }
 
-  // The attract flight plays behind the title screen, so the loop runs from the
-  // start rather than waiting for the click.
+  // The attract dogfight plays behind the title screen, so the loop runs from
+  // the start rather than waiting for the click.
   loop.start();
 
   // --- Title sequence ------------------------------------------------------
   //
-  // The overlay opens on four fading beats — title, subtitle, tagline, then what
-  // the sim actually lets you do — and only then offers the key list. The beats
-  // are pure CSS so they run on the compositor and stay smooth while the world
-  // is being built behind them; all this does is decide when they are over.
-  //
-  // Must match `--titles-end` in index.html.
-  // A backstop only — the sequence normally ends on the last beat's own
-  // `animationend`. A wall-clock timer cannot be the primary signal: the CSS
-  // clock starts at the first frame after `intro` is applied, and while the
-  // world is still building that frame can land the better part of a second
-  // late, so a fixed timeout fires partway through the closing beat.
+  // Five fading beats, then the main menu. The beats are pure CSS so they run
+  // on the compositor while the world builds behind them; this only decides
+  // when they are over. A wall-clock timeout backs up the last beat's own
+  // `animationend`, which is the real signal.
   const TITLES_TIMEOUT_MS = 18000;
   let titlesDone = false;
   let titleTimer = 0;
 
-  /** End the opening titles and ask which way in. */
+  /** End the opening titles and show the main menu. */
   const endTitles = (): void => {
     if (titlesDone) return;
     titlesDone = true;
     window.clearTimeout(titleTimer);
     overlay.classList.remove('intro');
     overlay.classList.add('choose');
-    // Deliberately nothing is focused. Focusing the primary button drew a ring
-    // round it the moment the screen arrived, which reads as a selection rather
-    // than as a default. Keyboard users get the ring when they reach for it —
-    // by Tab, or by the Enter below.
   };
 
-  /** Leave the choice behind, whichever way it went. */
-  const leaveChoice = (): void => {
-    overlay.classList.remove('choose');
-    document.body.classList.remove('titles');
-  };
-
-  // Begin the titles only once a frame has actually been painted. The beats are
-  // CSS animations, so putting `intro` in the markup started them at parse time
-  // and played the title card over a black screen while the world was still
-  // being built. Two frames: the first schedules the render, the second lands
-  // after it has been composited.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     if (titlesDone) return; // clicked through before the scene came up
     overlay.classList.add('intro');
     document.body.classList.add('titles');
-    // The closing beat tells us when it is finished, so the handover to the
-    // help panel stays in step with the animation however the frames fall.
     overlay.querySelector('.beat:last-of-type')
       ?.addEventListener('animationend', endTitles, { once: true });
     titleTimer = window.setTimeout(endTitles, TITLES_TIMEOUT_MS);
   }));
 
-  /**
-   * Open the key list in full.
-   *
-   * The panel has two depths. Straight after the titles it shows only the keys
-   * needed to fly and look around, because a wall of eighteen bindings is not
-   * what someone wants at the moment they are trying to get airborne. Asking
-   * for help — H, Escape, or the Help tab — means you want the rest of it, and
-   * it stays that way for the session.
-   */
+  /** The key list, over whatever is going on. */
   const showHelp = (): void => {
-    overlay.classList.add('full');
+    overlay.classList.remove('choose');
+    overlay.classList.add('full', 'ready');
     overlay.classList.remove('hidden');
+    if (game.state === 'playing') {
+      paused = true;
+      sfx.suspend();
+    }
   };
 
-  /**
-   * H both opens and closes the key list.
-   *
-   * Closing goes through `start` rather than just hiding the overlay, because
-   * on the very first screen the overlay is still the thing gating the flight —
-   * H there has to hand over properly, not leave the sim in attract mode with
-   * nothing on screen.
-   */
   const toggleHelp = (): void => {
     if (overlay.classList.contains('hidden')) showHelp();
     else start();
   };
 
-  /**
-   * Bring the radio up with the flight.
-   *
-   * Both ways in have to call this, and only from inside the click: browsers
-   * will not start audio without a user gesture, and the button press is the
-   * first one there is. It resumes whatever was last tuned in — Mission Control
-   * on a first visit — and stays quiet if the radio was switched off last time.
-   */
   const startRadio = (): void => {
     if (radio.status !== 'stopped' || savedRadio.playing === false) return;
     radio.select(typeof savedRadio.station === 'number' ? savedRadio.station : 0);
@@ -2374,112 +2005,47 @@ function boot(): void {
   };
 
   /**
-   * Land the audience where they were just flying: same world, same seed, but
-   * now on its runway with the controls their own.
-   *
-   * Called when Manual is chosen, not when the key list is dismissed. Leaving
-   * it until the dismissal meant the keys were read over the attract flight
-   * still wheeling about behind them — you were being told how to fly while
-   * watching a camera fly for you, and the aircraft only appeared on its runway
-   * once you had finished reading. Doing it on the button puts the thing the
-   * keys describe behind the keys that describe it.
+   * A click on the overlay: skips the titles, or closes the help. On the
+   * main menu clicks go to the buttons, not here.
    */
-  const takeControl = (): void => {
-    if (!introRunning) return;
-    introRunning = false;
-    controls.setMode('manual', model.telemetry);
-    status.flightMode = 'MANUAL';
-    rig.setMode('chase');
-    status.cameraMode = 'CHASE';
-    resetFlight();
-    world.prime(model.position);
-    panel.sync();
-    tips.clear();
-  };
-
   const start = (): void => {
-    // The first click belongs to the titles: skip them and put the choice up
-    // rather than dropping someone onto a runway before they have read anything.
     if (!titlesDone) {
       endTitles();
       return;
     }
-    // While the choice is up, the click has to land on one of the two buttons.
-    // The overlay-wide handler would otherwise take any stray click as "manual,
-    // now", which is the one answer nobody gave.
     if (overlay.classList.contains('choose')) return;
-    takeControl();
-    startRadio();
-
-    // The help screen is a pause from here on, not a gate — its closing line
-    // changes from "start" to "continue".
-    document.body.classList.add('started');
+    overlay.classList.remove('full', 'ready');
+    if (introRunning) {
+      // Help asked for from the menu: back to the menu.
+      overlay.classList.add('choose');
+      return;
+    }
     overlay.classList.add('hidden');
-    loop.start();
-    // Space both dismisses this screen and toggles the Style panel in flight.
-    // Input has already recorded the press, so without dropping the edge here
-    // the same keystroke would open Style on the very next frame.
+    paused = false;
+    sfx.resume();
     input.endFrame();
   };
-  // Manual: the key list, exactly as before. It is still a screen you dismiss
-  // to fly, so nothing else happens here — `start` does the rest.
-  chooseManual.addEventListener('click', (e) => {
-    e.stopPropagation();
-    leaveChoice();
-    // The time key works during the attract flight, so this is not redundant:
-    // whatever it was left on, the flight someone asked for opens in the light
-    // the sim promises.
-    world.setTimeOfDay(GOLDEN_HOUR);
-    status.timeOfDay = world.timeOfDay;
-    takeControl();
-    overlay.classList.add('ready');
-  });
 
-  /**
-   * Scenic flight: a new world, and the autopilot flying out of its airport.
-   *
-   * Somewhere new on purpose. The attract flight has been showing one landscape
-   * for the length of the titles, and "take me flying" answered with the same
-   * scenery would look like nothing had happened.
-   */
-  chooseTour.addEventListener('click', (e) => {
-    e.stopPropagation();
-    leaveChoice();
-    introRunning = false;
-    world.setTimeOfDay(GOLDEN_HOUR);
-    // `takeoff` puts it on the runway rather than preserving a flight — there
-    // is no flight to preserve, and the tour is written to start from a field.
-    newWorld({ landscape: 'random', reseed: true, takeoff: true });
-    world.prime(model.position);
-    // `toggleTour` is a toggle, and the attract flight does not use the
-    // autopilot — but a guard here costs nothing and turning the tour *off* at
-    // the moment someone asked for it would be a strange way to begin.
-    if (!autopilot.active) toggleTour();
-    startRadio();
-    document.body.classList.add('started');
-    overlay.classList.add('hidden');
-    loop.start();
-    input.endFrame();
-    panel.sync();
-  });
-
-  // The design credit is a real link. Without this, clicking it would also
-  // count as the click that dismisses the screen behind it.
   overlay.querySelector('.t-credit')?.addEventListener('click', (e) => e.stopPropagation());
   overlay.addEventListener('click', start);
   window.addEventListener('keydown', (e) => {
-    // Only while the screen is actually up — otherwise Space in flight would
-    // come through here as well as reaching its own binding.
     if (overlay.classList.contains('hidden')) return;
     if (overlay.classList.contains('choose')) {
-      // A focused button handles its own Enter and Space; pressing either with
-      // nothing focused takes the primary, so the keyboard is never stuck on a
-      // screen that deliberately focuses nothing.
-      if (document.activeElement === chooseTour || document.activeElement === chooseManual) return;
-      if (e.code === 'Enter' || e.code === 'Space') chooseTour.click();
+      if (menus.isOpen || document.activeElement instanceof HTMLButtonElement) return;
+      if (e.code === 'Enter') document.getElementById('choose-battle')?.click();
       return;
     }
     if (e.code === 'Enter' || e.code === 'Space') start();
+  });
+  // Any first gesture wakes the audio context (browsers insist on one).
+  window.addEventListener('pointerdown', () => sfx.init(), { once: true });
+  window.addEventListener('keydown', () => sfx.init(), { once: true });
+  window.addEventListener('beforeunload', () => {
+    try {
+      window.localStorage.setItem(SFX_KEY, String(sfx.volume));
+    } catch {
+      // Nothing to keep it in.
+    }
   });
 }
 

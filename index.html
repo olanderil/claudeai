@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-    <title>Horizon F18 &mdash; Flight Simulator</title>
+    <title>Horizon 1917 &mdash; Air War</title>
     <style>
       :root {
         color-scheme: dark;
-        --hud: #7dffb2;
+        --hud: #f2c46d;
         /* End of the title sequence — must match the last beat's delay plus
            its duration. Used only by the no-script fallback that reveals the
            help panel; main.ts hands over on the last beat's `animationend`. */
@@ -16,9 +16,9 @@
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
         width: 100%; height: 100%; overflow: hidden;
-        background: #05070c;
+        background: #080706;
         font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-        color: #dfe7f2;
+        color: #ebe5da;
       }
       #scene, #hud {
         position: fixed; inset: 0; width: 100%; height: 100%;
@@ -38,7 +38,7 @@
            opaque background hid it completely — the scene was being rendered
            the whole time and nobody could see it. */
         background: radial-gradient(ellipse at 50% 42%,
-          rgba(5, 10, 18, 0.20) 0%, rgba(3, 6, 11, 0.70) 80%);
+          rgba(12, 10, 8, 0.20) 0%, rgba(7, 6, 5, 0.70) 80%);
         transition: opacity 0.6s ease;
       }
       #overlay.hidden { opacity: 0; pointer-events: none; }
@@ -46,7 +46,7 @@
          landscape without hiding the flight that is the whole point of it. */
       #overlay.intro {
         background: radial-gradient(ellipse at 50% 46%,
-          rgba(5, 10, 18, 0.26) 0%, rgba(3, 6, 11, 0.76) 84%);
+          rgba(12, 10, 8, 0.26) 0%, rgba(7, 6, 5, 0.76) 84%);
       }
 
       /* ---- Logo ------------------------------------------------------------
@@ -65,16 +65,16 @@
       .icon-button {
         width: 38px; height: 38px; padding: 0;
         display: flex; align-items: center; justify-content: center;
-        background: rgba(8, 16, 24, 0.42);
-        border: 1px solid rgba(160, 200, 230, 0.22);
+        background: rgba(20, 17, 14, 0.42);
+        border: 1px solid rgba(214, 200, 176, 0.22);
         border-radius: 9px;
-        color: #dbe9f6;
+        color: #ece5d7;
         cursor: pointer;
         transition: background 0.18s ease, border-color 0.18s ease, opacity 0.3s ease;
       }
       .icon-button:hover {
-        background: rgba(14, 28, 40, 0.66);
-        border-color: rgba(160, 200, 230, 0.45);
+        background: rgba(34, 30, 24, 0.66);
+        border-color: rgba(214, 200, 176, 0.45);
       }
       .icon-button svg { width: 17px; height: 17px; display: block; }
       /*
@@ -95,14 +95,14 @@
         position: fixed; top: 76px; right: 32px; z-index: 8;
         width: 300px; max-height: calc(100vh - 120px); overflow-y: auto;
         padding: 14px 15px 12px;
-        background: rgba(6, 14, 20, 0.94);
-        border: 1px solid rgba(160, 200, 230, 0.24);
+        background: rgba(16, 14, 12, 0.94);
+        border: 1px solid rgba(214, 200, 176, 0.24);
         border-radius: 11px; backdrop-filter: blur(14px);
       }
       #radio-panel[hidden] { display: none; }
       #radio-panel::-webkit-scrollbar { width: 6px; }
       #radio-panel::-webkit-scrollbar-thumb {
-        background: rgba(125, 255, 178, 0.3); border-radius: 3px;
+        background: rgba(242, 196, 109, 0.3); border-radius: 3px;
       }
       .radio-head {
         display: flex; align-items: baseline; justify-content: space-between;
@@ -113,7 +113,7 @@
         text-transform: uppercase; color: var(--hud);
       }
       #radio-status {
-        font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #62778a;
+        font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #857c6f;
       }
       #radio-status.on { color: var(--hud); }
       #radio-status.bad { color: #ffb27d; }
@@ -121,39 +121,39 @@
         appearance: none; border: 0; background: transparent; cursor: pointer;
         font: inherit; width: 100%; text-align: left;
         display: flex; align-items: baseline; gap: 8px;
-        padding: 6px 8px; border-radius: 6px; color: #b9cbdb; font-size: 12px;
+        padding: 6px 8px; border-radius: 6px; color: #cbc2b2; font-size: 12px;
         transition: background 0.12s ease, color 0.12s ease;
       }
       /* The name never wraps — a station called "Deep Space One" broken across
          two lines stops looking like one station. The description gives way
          instead, since it is the part you can guess. */
       .radio-station > span:first-of-type { flex: none; white-space: nowrap; }
-      .radio-station:hover { background: rgba(125, 255, 178, 0.13); color: #fff; }
-      .radio-station.current { background: rgba(125, 255, 178, 0.16); color: var(--hud); }
+      .radio-station:hover { background: rgba(242, 196, 109, 0.13); color: #fff; }
+      .radio-station.current { background: rgba(242, 196, 109, 0.16); color: var(--hud); }
       .radio-station .blurb {
         margin-left: auto; min-width: 0; text-align: right;
-        font-size: 9px; letter-spacing: 0.04em; color: #62778a; text-transform: uppercase;
+        font-size: 9px; letter-spacing: 0.04em; color: #857c6f; text-transform: uppercase;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
-      .radio-station.current .blurb, .radio-station:hover .blurb { color: #8ba2b5; }
+      .radio-station.current .blurb, .radio-station:hover .blurb { color: #a09787; }
       /* The playing station carries the transport: clicking it again stops it. */
       .radio-station.current::before { content: '❚❚'; font-size: 8px; }
       .radio-station::before { content: '▶'; font-size: 8px; opacity: 0.55; width: 12px; }
       .radio-file {
         display: block; margin: 10px 0 4px; cursor: pointer;
         padding: 8px 10px; border-radius: 6px; font-size: 11px;
-        color: var(--hud); background: rgba(125, 255, 178, 0.1);
-        border: 1px solid rgba(125, 255, 178, 0.35);
+        color: var(--hud); background: rgba(242, 196, 109, 0.1);
+        border: 1px solid rgba(242, 196, 109, 0.35);
         text-align: center; transition: background 0.15s;
       }
-      .radio-file:hover { background: rgba(125, 255, 178, 0.2); }
+      .radio-file:hover { background: rgba(242, 196, 109, 0.2); }
       .radio-file input { display: none; }
       #radio-panel .panel-slider { margin: 12px 0 4px; }
       #radio-panel .panel-note { font-size: 10px; line-height: 1.45; margin-top: 10px; }
       #radio[aria-expanded="true"] {
-        background: rgba(14, 28, 40, 0.8); border-color: rgba(160, 200, 230, 0.5);
+        background: rgba(34, 30, 24, 0.8); border-color: rgba(214, 200, 176, 0.5);
       }
-      #radio.on { color: var(--hud); border-color: rgba(125, 255, 178, 0.45); }
+      #radio.on { color: var(--hud); border-color: rgba(242, 196, 109, 0.45); }
 
       /* ---- Director bar ---------------------------------------------------
          One dark plate carrying the whole control: previous, the running shot,
@@ -170,8 +170,8 @@
         width: max-content; max-width: calc(100vw - 24px);
         z-index: 5; display: none; align-items: center; gap: 2px; padding: 4px;
         flex-wrap: wrap; justify-content: center;
-        background: rgba(6, 14, 20, 0.82);
-        border: 1px solid rgba(160, 200, 230, 0.22);
+        background: rgba(16, 14, 12, 0.82);
+        border: 1px solid rgba(214, 200, 176, 0.22);
         border-radius: 11px; backdrop-filter: blur(10px);
       }
       body.director #director-bar { display: flex; }
@@ -241,13 +241,13 @@
       #shot-shape-open span { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; }
       /* Open is a state worth seeing on the bar — the panel it opens can be
          behind the aircraft, and the pin it sets is not obviously its doing. */
-      #shot-shape-open[aria-expanded="true"] { background: var(--hud); color: #04120b; }
-      #shot-shape-open[aria-expanded="true"]:hover { background: #9dffc6; color: #04120b; }
+      #shot-shape-open[aria-expanded="true"] { background: var(--hud); color: #1c1407; }
+      #shot-shape-open[aria-expanded="true"]:hover { background: #f7d696; color: #1c1407; }
       #free-reframe, #free-lock { padding: 0 10px 0 8px; gap: 6px; font-size: 9px; }
       /* Same "on" treatment as the director's pin — one filled state across the
          whole bar, so a lit button always means the same thing. */
-      #free-reframe[aria-pressed="true"] { background: var(--hud); color: #04120b; }
-      #free-reframe[aria-pressed="true"]:hover { background: #9dffc6; color: #04120b; }
+      #free-reframe[aria-pressed="true"] { background: var(--hud); color: #1c1407; }
+      #free-reframe[aria-pressed="true"]:hover { background: #f7d696; color: #1c1407; }
       #free-reframe svg, #free-lock svg { width: 14px; height: 14px; }
       /* One icon per state rather than two buttons: the glyph is the readout. */
       #free-lock #free-lock-world { display: none; }
@@ -259,7 +259,7 @@
       #tour-speed { display: none; align-items: center; gap: 8px; }
       body.touring #tour-speed { display: flex; }
       .bar-label {
-        font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #8ea3b6;
+        font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #a39a8b;
       }
       #pace-styles, #tour-speeds { flex-wrap: nowrap; gap: 3px; }
       #tour-speeds button { padding: 5px 7px; font-size: 9px; letter-spacing: 0.06em; }
@@ -269,7 +269,7 @@
       /* A slider small enough to live on a bar: label, track, readout, one row. */
       .bar-slider {
         display: flex; align-items: center; gap: 7px; cursor: pointer;
-        font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #8ea3b6;
+        font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #a39a8b;
       }
       /* Id-qualified on purpose: the shared track rule below sets `width: 100%`
          at the same specificity and appears later in the file, so an unqualified
@@ -280,25 +280,25 @@
         /* Wide enough for "1.00× · 3.2 s" on one line — wrapping it made the
            bar two rows tall wherever the readout happened to be longest. */
         min-width: 88px; white-space: nowrap;
-        font-size: 10px; font-weight: 600; color: #eaf4ff;
+        font-size: 10px; font-weight: 600; color: #f5efe3;
         letter-spacing: 0.04em; text-transform: none;
       }
       #shot-transport[hidden] { display: none; }
       .bar-button, .bar-name {
         appearance: none; border: 0; background: transparent; cursor: pointer;
-        font: inherit; color: #dbe9f6;
+        font: inherit; color: #ece5d7;
         height: 30px; border-radius: 7px;
         display: flex; align-items: center; justify-content: center;
         transition: background 0.15s ease, color 0.15s ease;
       }
       .bar-button { min-width: 30px; padding: 0 7px; gap: 7px; }
-      .bar-button:hover, .bar-name:hover { background: rgba(125, 255, 178, 0.13); color: #fff; }
+      .bar-button:hover, .bar-name:hover { background: rgba(242, 196, 109, 0.13); color: #fff; }
       .bar-button svg { width: 15px; height: 15px; display: block; }
       .bar-name {
-        gap: 8px; padding: 0 8px 0 11px; color: #eaf4ff;
+        gap: 8px; padding: 0 8px 0 11px; color: #f5efe3;
         font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
       }
-      .bar-name[aria-expanded="true"] { background: rgba(125, 255, 178, 0.13); }
+      .bar-name[aria-expanded="true"] { background: rgba(242, 196, 109, 0.13); }
       /* Fixed width, not shrink-to-fit: the director cuts on its own clock, and
          a name that resized the bar would slide the arrows out from under the
          pointer between one shot and the next. */
@@ -310,22 +310,22 @@
       .bar-name[aria-expanded="true"] .caret { transform: rotate(180deg); opacity: 1; }
       .bar-split {
         width: 1px; height: 19px; margin: 0 4px;
-        background: rgba(160, 200, 230, 0.24);
+        background: rgba(214, 200, 176, 0.24);
       }
       .bar-pin {
         padding: 0 12px 0 9px;
         font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
       }
       /* Pinned is a state, not an action, so it stays lit for as long as it holds. */
-      #shot-pin[aria-pressed="true"] { background: var(--hud); color: #04120b; }
-      #shot-pin[aria-pressed="true"]:hover { background: #9dffc6; color: #04120b; }
+      #shot-pin[aria-pressed="true"] { background: var(--hud); color: #1c1407; }
+      #shot-pin[aria-pressed="true"]:hover { background: #f7d696; color: #1c1407; }
 
-      #shot-help[aria-expanded="true"] { background: rgba(125, 255, 178, 0.13); color: #fff; }
+      #shot-help[aria-expanded="true"] { background: rgba(242, 196, 109, 0.13); color: #fff; }
       #shot-keys {
         position: absolute; right: 0; bottom: calc(100% + 9px);
         z-index: 6; width: max-content; padding: 12px 15px;
-        background: rgba(6, 14, 20, 0.94);
-        border: 1px solid rgba(160, 200, 230, 0.24);
+        background: rgba(16, 14, 12, 0.94);
+        border: 1px solid rgba(214, 200, 176, 0.24);
         border-radius: 10px; backdrop-filter: blur(14px);
         display: grid; grid-template-columns: auto auto; gap: 8px 14px; align-items: center;
       }
@@ -333,10 +333,10 @@
       #shot-keys kbd {
         font: inherit; font-size: 11px; min-width: 24px; text-align: center;
         padding: 3px 0; border-radius: 5px; color: var(--hud);
-        background: rgba(125, 255, 178, 0.13);
-        border: 1px solid rgba(125, 255, 178, 0.32);
+        background: rgba(242, 196, 109, 0.13);
+        border: 1px solid rgba(242, 196, 109, 0.32);
       }
-      #shot-keys span { font-size: 12px; color: #b9cbdb; white-space: nowrap; }
+      #shot-keys span { font-size: 12px; color: #cbc2b2; white-space: nowrap; }
 
       /* The two knobs that decide how a shot feels: how long it is held, and
          how far the camera travels while it is. Same chrome as the key list,
@@ -354,8 +354,8 @@
         gap: 4px 20px; text-align: left;
         /* On a short window it scrolls rather than running off the top. */
         max-height: calc(100vh - 150px); overflow-y: auto;
-        background: rgba(6, 14, 20, 0.94);
-        border: 1px solid rgba(160, 200, 230, 0.24);
+        background: rgba(16, 14, 12, 0.94);
+        border: 1px solid rgba(214, 200, 176, 0.24);
         border-radius: 10px; backdrop-filter: blur(14px);
         text-align: left;
       }
@@ -379,7 +379,7 @@
          actually on. */
       #shot-shape h4 {
         font-size: 9px; font-weight: 600; letter-spacing: 0.14em;
-        text-transform: uppercase; color: #8ea3b6; margin-bottom: 10px;
+        text-transform: uppercase; color: #a39a8b; margin-bottom: 10px;
       }
       /* Every column starts at the same height, so the three headings line up
          across the panel. */
@@ -391,14 +391,14 @@
       #shot-shape .panel-segmented button {
         padding: 7px 4px; min-width: 0; border-radius: 6px;
         font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
-        color: #8ea3b6; background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(160, 200, 230, 0.16);
+        color: #a39a8b; background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(214, 200, 176, 0.16);
       }
       #shot-shape .panel-segmented button:hover {
-        background: rgba(125, 255, 178, 0.16); color: #fff;
+        background: rgba(242, 196, 109, 0.16); color: #fff;
       }
       #shot-shape .panel-segmented button.active {
-        color: #04120b; background: var(--hud); border-color: var(--hud); font-weight: 600;
+        color: #1c1407; background: var(--hud); border-color: var(--hud); font-weight: 600;
       }
 
       /* Sliders: the bar's label/readout pair, stacked because a panel column
@@ -413,10 +413,10 @@
       .shape-row {
         display: flex; justify-content: space-between; align-items: baseline;
         gap: 10px; margin-bottom: 7px;
-        font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #8ea3b6;
+        font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #a39a8b;
       }
       .shape-row strong {
-        font-size: 10px; font-weight: 600; color: #eaf4ff;
+        font-size: 10px; font-weight: 600; color: #f5efe3;
         letter-spacing: 0.04em; text-transform: none; white-space: nowrap;
       }
 
@@ -426,39 +426,39 @@
         width: 100%; margin-top: 0; margin-bottom: 6px;
         height: 32px; padding: 0 12px; border-radius: 7px;
         font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase;
-        color: #dbe9f6; background: transparent;
-        border: 1px solid rgba(160, 200, 230, 0.24);
+        color: #ece5d7; background: transparent;
+        border: 1px solid rgba(214, 200, 176, 0.24);
         display: flex; align-items: center; justify-content: center; gap: 7px;
         transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
       }
-      #shot-shape .panel-button:hover { background: rgba(125, 255, 178, 0.16); color: #fff; }
+      #shot-shape .panel-button:hover { background: rgba(242, 196, 109, 0.16); color: #fff; }
       #shot-shape .panel-button svg { width: 13px; height: 13px; flex: none; }
       #shot-reverse[aria-pressed="true"],
       #shot-loop[aria-pressed="true"] {
-        background: var(--hud); color: #04120b; border-color: var(--hud); font-weight: 600;
+        background: var(--hud); color: #1c1407; border-color: var(--hud); font-weight: 600;
       }
       /* Both need this: `.panel-button:hover` is a class plus a pseudo-class and
          so outranks a plain id-and-attribute rule, which meant a lit button
          went dim under the pointer that had just switched it on. */
       #shot-reverse[aria-pressed="true"]:hover,
-      #shot-loop[aria-pressed="true"]:hover { background: #9dffc6; color: #04120b; }
+      #shot-loop[aria-pressed="true"]:hover { background: #f7d696; color: #1c1407; }
 
       /* ---- Saved shots and the reel ---------------------------------------
          Nine slots on the number keys, and a running order made of them. */
       #shot-slots { display: flex; gap: 3px; margin-bottom: 12px; }
       .slot-button {
-        appearance: none; border: 1px solid rgba(160, 200, 230, 0.2); cursor: pointer;
+        appearance: none; border: 1px solid rgba(214, 200, 176, 0.2); cursor: pointer;
         font: inherit; font-size: 10px; flex: 1 1 0; min-width: 0;
         padding: 6px 0; border-radius: 6px;
-        background: rgba(255, 255, 255, 0.04); color: #55697c;
+        background: rgba(255, 255, 255, 0.04); color: #766e62;
         transition: background 0.12s, color 0.12s, border-color 0.12s;
       }
       /* Filled slots are the ones worth pressing, so they are the ones that
          look pressable; empty ones stay quiet until you have something to put
          in them. */
-      .slot-button.filled { color: #cfe0ef; border-color: rgba(125, 255, 178, 0.32); }
-      .slot-button:hover { background: rgba(125, 255, 178, 0.16); color: #fff; }
-      .slot-button.current { background: var(--hud); color: #04120b; font-weight: 600; }
+      .slot-button.filled { color: #e2dacb; border-color: rgba(242, 196, 109, 0.32); }
+      .slot-button:hover { background: rgba(242, 196, 109, 0.16); color: #fff; }
+      .slot-button.current { background: var(--hud); color: #1c1407; font-weight: 600; }
       /* The slot Save will write to. Picked first, written second — so the
          panel has to keep saying which one it is until you do. */
       .slot-button.picked {
@@ -471,13 +471,13 @@
         appearance: none; cursor: pointer; font: inherit;
         font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase;
         padding: 4px 10px; border-radius: 6px;
-        color: #dbe9f6; background: transparent;
-        border: 1px solid rgba(160, 200, 230, 0.24);
+        color: #ece5d7; background: transparent;
+        border: 1px solid rgba(214, 200, 176, 0.24);
         transition: background 0.15s, color 0.15s, border-color 0.15s;
       }
-      .shape-row button:hover { background: rgba(125, 255, 178, 0.16); color: #fff; }
+      .shape-row button:hover { background: rgba(242, 196, 109, 0.16); color: #fff; }
       .shape-row button[aria-pressed="true"] {
-        background: var(--hud); color: #04120b; border-color: var(--hud);
+        background: var(--hud); color: #1c1407; border-color: var(--hud);
       }
       /* Save is the one amber control in here, matching the amber outline of
          the slot it is about to write to. Outlined like everything else — it
@@ -492,21 +492,21 @@
         display: flex; flex-wrap: wrap; gap: 4px; min-height: 26px;
         padding: 5px; border-radius: 7px;
         background: rgba(255, 255, 255, 0.03);
-        border: 1px dashed rgba(160, 200, 230, 0.18);
+        border: 1px dashed rgba(214, 200, 176, 0.18);
       }
       .reel-chip {
-        appearance: none; border: 1px solid rgba(160, 200, 230, 0.24); cursor: grab;
+        appearance: none; border: 1px solid rgba(214, 200, 176, 0.24); cursor: grab;
         font: inherit; font-size: 10px; padding: 3px 9px; border-radius: 999px;
-        background: rgba(255, 255, 255, 0.04); color: #dbe9f6;
+        background: rgba(255, 255, 255, 0.04); color: #ece5d7;
         touch-action: none; user-select: none;
       }
       .reel-chip.playing {
-        background: var(--hud); color: #04120b; border-color: var(--hud); font-weight: 600;
+        background: var(--hud); color: #1c1407; border-color: var(--hud); font-weight: 600;
       }
       .reel-chip.dragging { opacity: 0.45; cursor: grabbing; }
       .reel-chip.dropped { opacity: 0.3; text-decoration: line-through; }
       #reel-note {
-        font-size: 10px; margin-top: 9px; line-height: 1.5; color: #8ea3b6;
+        font-size: 10px; margin-top: 9px; line-height: 1.5; color: #a39a8b;
         letter-spacing: 0.02em; text-transform: none;
       }
       /* A slot number on the rows that have one, so the list doubles as the map
@@ -515,7 +515,7 @@
       .menu-slot {
         flex: none; min-width: 15px; text-align: center;
         font-size: 9px; padding: 1px 0; border-radius: 4px;
-        color: #04120b; background: rgba(125, 255, 178, 0.75);
+        color: #1c1407; background: rgba(242, 196, 109, 0.75);
       }
 
       /* ---- Shot picker ----------------------------------------------------
@@ -538,8 +538,8 @@
            editor underneath takes its share of that room. */
         max-height: calc(100vh - 76px - var(--shot-menu-bottom, 114px));
         padding: 16px 18px 18px;
-        background: rgba(6, 14, 20, 0.94);
-        border: 1px solid rgba(160, 200, 230, 0.24);
+        background: rgba(16, 14, 12, 0.94);
+        border: 1px solid rgba(214, 200, 176, 0.24);
         border-radius: 12px; backdrop-filter: blur(14px);
         display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
         gap: 16px 22px;
@@ -548,7 +548,7 @@
       #shot-menu[hidden] { display: none; }
       #shot-menu::-webkit-scrollbar { width: 6px; }
       #shot-menu::-webkit-scrollbar-thumb {
-        background: rgba(125, 255, 178, 0.3); border-radius: 3px;
+        background: rgba(242, 196, 109, 0.3); border-radius: 3px;
       }
       .menu-group { min-width: 0; }
       .menu-group h4 {
@@ -560,19 +560,19 @@
         appearance: none; border: 0; background: transparent; cursor: pointer;
         font: inherit; font-size: 12px; width: 100%; text-align: left;
         display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
-        padding: 5px 8px; border-radius: 6px; color: #b9cbdb;
+        padding: 5px 8px; border-radius: 6px; color: #cbc2b2;
         transition: background 0.12s ease, color 0.12s ease;
       }
-      .menu-shot:hover { background: rgba(125, 255, 178, 0.13); color: #fff; }
+      .menu-shot:hover { background: rgba(242, 196, 109, 0.13); color: #fff; }
       /* Nothing in range to stand a camera on. */
       .menu-shot:disabled { opacity: 0.34; cursor: default; }
       .menu-shot:disabled:hover { background: none; color: inherit; }
-      .menu-shot.current { background: rgba(125, 255, 178, 0.16); color: var(--hud); }
+      .menu-shot.current { background: rgba(242, 196, 109, 0.16); color: var(--hud); }
       .menu-mark {
         flex: none; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
-        color: #62778a; white-space: nowrap;
+        color: #857c6f; white-space: nowrap;
       }
-      .menu-shot:hover .menu-mark, .menu-shot.current .menu-mark { color: #8ba2b5; }
+      .menu-shot:hover .menu-mark, .menu-shot.current .menu-mark { color: #a09787; }
       /* Either popover opens across the tip line it sits over; one thing at a
          time, and the key list is the fuller version of what the tip says. */
       body:has(#shot-menu:not([hidden])) #tips,
@@ -602,13 +602,13 @@
       #brand svg { width: 38px; height: 38px; display: block; flex: none; }
       .brand-name {
         font-size: 19px; font-weight: 500; letter-spacing: 0.28em;
-        text-transform: uppercase; color: #eaf4ff; line-height: 1;
+        text-transform: uppercase; color: #f5efe3; line-height: 1;
         text-shadow: 0 2px 16px rgba(0, 0, 0, 0.9);
       }
       .brand-name .accent { color: var(--hud); }
       .brand-tag {
         margin-top: 6px; font-size: 8px; letter-spacing: 0.42em;
-        text-transform: uppercase; color: #63798d; line-height: 1;
+        text-transform: uppercase; color: #877e71; line-height: 1;
         text-shadow: 0 1px 10px rgba(0, 0, 0, 0.9);
       }
       @keyframes brand-in {
@@ -670,24 +670,24 @@
            11 tracked-out characters always clear the beat's own width. */
         white-space: nowrap;
         font-size: clamp(26px, 6.6vw, 74px); font-weight: 300;
-        letter-spacing: 0.2em; text-transform: uppercase; color: #eaf4ff;
+        letter-spacing: 0.2em; text-transform: uppercase; color: #f5efe3;
         /* The indent cancels the trailing letter-space, which otherwise pushes
            centred tracked-out type visibly left of centre. */
         text-indent: 0.2em; line-height: 1.1;
-        text-shadow: 0 0 40px rgba(130, 195, 255, 0.30), 0 3px 30px rgba(0, 0, 0, 0.9);
+        text-shadow: 0 0 40px rgba(242, 196, 109, 0.30), 0 3px 30px rgba(0, 0, 0, 0.9);
       }
       .t-title .accent {
         color: var(--hud);
-        text-shadow: 0 0 34px rgba(125, 255, 178, 0.45), 0 3px 26px rgba(0, 0, 0, 0.85);
+        text-shadow: 0 0 34px rgba(242, 196, 109, 0.45), 0 3px 26px rgba(0, 0, 0, 0.85);
       }
       .rule {
         width: min(420px, 62vw); height: 1px; margin: 22px auto 0;
         background: linear-gradient(90deg,
-          transparent, rgba(125, 255, 178, 0.7) 50%, transparent);
+          transparent, rgba(242, 196, 109, 0.7) 50%, transparent);
       }
       .t-sub {
         font-size: clamp(16px, 3.2vw, 30px); letter-spacing: 0.52em;
-        text-transform: uppercase; color: #cfe0ef; text-indent: 0.52em;
+        text-transform: uppercase; color: #e2dacb; text-indent: 0.52em;
         text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6), 0 2px 9px rgba(0, 0, 0, 0.7);
       }
       /* The three text beats share one setting, so the sequence does not appear
@@ -702,10 +702,10 @@
            bright sky without any visible smear. */
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7), 0 2px 5px rgba(0, 0, 0, 0.5);
       }
-      .t-line { color: #eaf4ff; }
+      .t-line { color: #f5efe3; }
       /* A half-step down from the tagline — enough hierarchy to tell the hero
          line from the two that explain it, now that they are the same size. */
-      .t-body { color: #d8e4f0; }
+      .t-body { color: #e6dfd2; }
       /* The design credit. `#titles` is click-through, so this one element has
          to take pointer events back for the link to be reachable. */
       .t-credit {
@@ -713,7 +713,7 @@
         font-size: 12px; font-weight: 500; letter-spacing: 0.32em;
         text-transform: uppercase; white-space: nowrap; opacity: 0;
         color: var(--hud); text-decoration: none; pointer-events: auto;
-        text-shadow: 0 0 18px rgba(125, 255, 178, 0.45), 0 2px 10px rgba(0, 0, 0, 0.9);
+        text-shadow: 0 0 18px rgba(242, 196, 109, 0.45), 0 2px 10px rgba(0, 0, 0, 0.9);
       }
       .t-credit:hover { color: #ffffff; text-decoration: underline; }
       #overlay.intro .t-credit { animation: credit-in 1.2s 2.6s ease both; }
@@ -744,8 +744,8 @@
         max-width: 640px; max-height: 100%; overflow: hidden;
         display: flex; flex-direction: column;
         padding: 34px 40px;
-        border: 1px solid rgba(125, 255, 178, 0.22);
-        background: rgba(6, 13, 19, 0.82);
+        border: 1px solid rgba(242, 196, 109, 0.22);
+        background: rgba(15, 13, 11, 0.82);
         backdrop-filter: blur(3px);
         border-radius: 6px;
         box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
@@ -784,11 +784,11 @@
          the centre has a visible edge somewhere out in the mid-field, and the
          eye finds it immediately — a circle drawn over the landscape. Flat has
          no edge to find. The flight still reads through it. */
-      #overlay.choose { background: rgba(4, 8, 13, 0.72); }
+      #overlay.choose { background: rgba(10, 8, 6, 0.72); }
       .c-mark { width: 74px; height: 74px; display: block; margin-bottom: 22px; }
       .c-title {
         font-size: 34px; font-weight: 500; letter-spacing: 0.3em;
-        text-transform: uppercase; color: #eaf4ff; line-height: 1;
+        text-transform: uppercase; color: #f5efe3; line-height: 1;
         /* Letter-spacing puts its width to the right of the last glyph, which
            reads as the whole line sitting left of centre. */
         text-indent: 0.3em;
@@ -799,11 +799,11 @@
         /* The wordmark is set at line-height 1, so its own box stops at the
            baseline and a small margin here puts the sub into its descenders. */
         margin-top: 18px; font-size: 10px; letter-spacing: 0.42em;
-        text-transform: uppercase; color: rgba(190, 214, 235, 0.72); text-indent: 0.42em;
+        text-transform: uppercase; color: rgba(222, 212, 196, 0.72); text-indent: 0.42em;
       }
       .c-lede {
         margin-top: 26px; font-size: 14px; line-height: 1.65;
-        color: rgba(214, 231, 246, 0.86); text-shadow: 0 1px 10px rgba(0, 0, 0, 0.8);
+        color: rgba(236, 229, 216, 0.86); text-shadow: 0 1px 10px rgba(0, 0, 0, 0.8);
       }
       .c-actions { margin-top: 30px; display: flex; gap: 12px; flex-wrap: wrap;
         justify-content: center; }
@@ -811,20 +811,20 @@
         appearance: none; cursor: pointer; font: inherit;
         font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase;
         padding: 13px 26px; border-radius: 6px;
-        color: #dbe9f6; background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(160, 200, 230, 0.3);
+        color: #ece5d7; background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(214, 200, 176, 0.3);
         transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
       }
-      .c-actions button:hover { background: rgba(125, 255, 178, 0.16); color: #fff; }
+      .c-actions button:hover { background: rgba(242, 196, 109, 0.16); color: #fff; }
       .c-actions .c-primary {
-        background: var(--hud); border-color: var(--hud); color: #04120b; font-weight: 600;
+        background: var(--hud); border-color: var(--hud); color: #1c1407; font-weight: 600;
       }
-      .c-actions .c-primary:hover { background: #9dffc6; color: #04120b; }
+      .c-actions .c-primary:hover { background: #f7d696; color: #1c1407; }
       /* Keyboard focus still has to be visible, but in the screen's own colours
          rather than the amber the director's panel uses for "this is the slot
          you are about to overwrite" — nothing is being overwritten here. */
       .c-actions button:focus-visible {
-        outline: 2px solid rgba(234, 244, 255, 0.75); outline-offset: 3px;
+        outline: 2px solid rgba(245, 239, 227, 0.75); outline-offset: 3px;
       }
       @media (max-width: 560px) {
         .c-title { font-size: 26px; }
@@ -848,12 +848,12 @@
       }
       .panel h1 {
         font-size: 26px; font-weight: 600; letter-spacing: 0.16em;
-        color: #eaf4ff; text-transform: uppercase; margin-bottom: 6px;
+        color: #f5efe3; text-transform: uppercase; margin-bottom: 6px;
       }
       .panel h1 .accent { color: var(--hud); }
       .panel .sub {
         font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase;
-        color: #6d8296; margin-bottom: 24px;
+        color: #8e8577; margin-bottom: 24px;
       }
       .keys {
         display: grid; grid-template-columns: auto 1fr; gap: 7px 18px;
@@ -862,13 +862,13 @@
            the list rather than the panel, so the title and "click to start"
            stay on screen instead of being pushed below the fold. */
         overflow-y: auto; min-height: 0; padding-right: 6px;
-        scrollbar-width: thin; scrollbar-color: rgba(125, 255, 178, 0.35) transparent;
+        scrollbar-width: thin; scrollbar-color: rgba(242, 196, 109, 0.35) transparent;
       }
       /* Only visible when the list actually overflows, which on a full-height
          window it does not — but without it a clipped row looks like the end. */
       .keys::-webkit-scrollbar { width: 6px; }
       .keys::-webkit-scrollbar-thumb {
-        background: rgba(125, 255, 178, 0.3); border-radius: 3px;
+        background: rgba(242, 196, 109, 0.3); border-radius: 3px;
       }
       .keys dt { color: var(--hud); white-space: nowrap; }
       /* A subheading inside the two-column grid: spans both tracks so it needs
@@ -876,10 +876,10 @@
          on the colour without needing to come later in the sheet. */
       .keys .group {
         grid-column: 1 / -1;
-        margin-top: 12px; color: #7d8fa0;
+        margin-top: 12px; color: #978e80;
         font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
       }
-      .keys dd { color: #9fb2c4; }
+      .keys dd { color: #b3aa9b; }
       /* Two depths of help. The screen that follows the titles carries only the
          keys needed to fly and look around; `full` — set by H, Escape or the
          Help tab — adds the rest. Grid items, so `none` collapses the row
@@ -898,8 +898,8 @@
       #overlay.full .keys dd > .basic { display: none; }
       .start {
         flex: none; margin-top: 26px; padding-top: 18px;
-        border-top: 1px solid rgba(125, 255, 178, 0.16);
-        font-size: 13px; color: #8ea3b6;
+        border-top: 1px solid rgba(242, 196, 109, 0.16);
+        font-size: 13px; color: #a39a8b;
       }
       .start b { color: #fff; font-weight: 600; }
       .in-game { display: none; }
@@ -952,8 +952,8 @@
       .tip {
         position: relative; pointer-events: auto;
         padding: 9px 18px; border-radius: 999px;
-        background: rgba(6, 14, 20, 0.78);
-        border: 1px solid rgba(125, 255, 178, 0.3);
+        background: rgba(16, 14, 12, 0.78);
+        border: 1px solid rgba(242, 196, 109, 0.3);
         color: var(--hud); font-size: 13px; letter-spacing: 0.04em;
         backdrop-filter: blur(8px);
         opacity: 0; transform: translateY(8px);
@@ -968,15 +968,15 @@
         position: absolute; top: -7px; right: -7px;
         width: 18px; height: 18px; padding: 0; border-radius: 50%;
         display: flex; align-items: center; justify-content: center;
-        background: rgba(6, 14, 20, 0.92);
-        border: 1px solid rgba(160, 200, 230, 0.3);
-        color: #93a8bb; font-size: 13px; line-height: 1;
+        background: rgba(16, 14, 12, 0.92);
+        border: 1px solid rgba(214, 200, 176, 0.3);
+        color: #a69d8e; font-size: 13px; line-height: 1;
         /* Quiet, but present: an affordance nobody can see is not one. It
            brightens under the pointer rather than appearing from nothing. */
         opacity: 0.5; transition: opacity 0.25s ease, color 0.15s, border-color 0.15s;
       }
       .tip:hover .tip-close, .tip-close:focus-visible { opacity: 1; }
-      .tip-close:hover { color: #eaf4ff; border-color: rgba(160, 200, 230, 0.6); }
+      .tip-close:hover { color: #f5efe3; border-color: rgba(214, 200, 176, 0.6); }
       /* Tips are appended after the overlay, so they paint on top of it. They
          are hints about the flight and have no business over the help screen. */
       body:has(#overlay:not(.hidden)) #tips { opacity: 0; }
@@ -1007,24 +1007,24 @@
 
       #panel-tabs {
         display: flex; gap: 2px; padding: 4px; order: 2;
-        background: rgba(6, 14, 20, 0.86);
-        border: 1px solid rgba(125, 255, 178, 0.22);
+        background: rgba(16, 14, 12, 0.86);
+        border: 1px solid rgba(242, 196, 109, 0.22);
         border-bottom: none; border-radius: 9px 9px 0 0;
         backdrop-filter: blur(10px);
       }
       #panel-tabs button {
         appearance: none; border: 0; cursor: pointer; font: inherit;
-        background: transparent; color: #8ea3b6;
+        background: transparent; color: #a39a8b;
         letter-spacing: 0.16em; text-transform: uppercase;
         padding: 9px 22px; border-radius: 6px; transition: background 0.15s, color 0.15s;
       }
-      #panel-tabs button:hover { color: #dfe7f2; background: rgba(125, 255, 178, 0.1); }
-      #panel-tabs button.active { color: #04120b; background: var(--hud); font-weight: 600; }
+      #panel-tabs button:hover { color: #ebe5da; background: rgba(242, 196, 109, 0.1); }
+      #panel-tabs button.active { color: #1c1407; background: var(--hud); font-weight: 600; }
 
       #panel-body {
         order: 1; width: 100%; max-height: 44vh; overflow-y: auto;
-        background: rgba(6, 14, 20, 0.92);
-        border: 1px solid rgba(125, 255, 178, 0.22);
+        background: rgba(16, 14, 12, 0.92);
+        border: 1px solid rgba(242, 196, 109, 0.22);
         border-radius: 10px 10px 0 0; padding: 18px 20px 20px;
         display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
         gap: 16px 26px; backdrop-filter: blur(12px);
@@ -1043,21 +1043,21 @@
       .panel-column { min-width: 0; display: flex; flex-direction: column; gap: 18px; }
       .panel-row {
         display: flex; justify-content: space-between; align-items: baseline;
-        gap: 12px; color: #9fb2c4; margin-bottom: 6px;
+        gap: 12px; color: #b3aa9b; margin-bottom: 6px;
       }
       .panel-row strong { color: #fff; font-weight: 600; }
       .panel-note {
-        color: #6d8296; font-size: 11px; line-height: 1.5; margin-top: 8px;
+        color: #8e8577; font-size: 11px; line-height: 1.5; margin-top: 8px;
       }
 
       .panel-button {
         appearance: none; cursor: pointer; font: inherit; width: 100%;
         margin-top: 4px; padding: 9px 12px; border-radius: 6px;
-        color: var(--hud); background: rgba(125, 255, 178, 0.1);
-        border: 1px solid rgba(125, 255, 178, 0.35);
+        color: var(--hud); background: rgba(242, 196, 109, 0.1);
+        border: 1px solid rgba(242, 196, 109, 0.35);
         letter-spacing: 0.08em; transition: background 0.15s;
       }
-      .panel-button:hover { background: rgba(125, 255, 178, 0.2); }
+      .panel-button:hover { background: rgba(242, 196, 109, 0.2); }
       /* Two actions that differ only in one detail read best side by side. They
          wrap on a narrow panel rather than squeezing the longer label. */
       .panel-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -1067,13 +1067,13 @@
       .panel-segmented button {
         appearance: none; cursor: pointer; font: inherit; flex: 1 1 auto;
         padding: 7px 10px; border-radius: 5px; font-size: 11px;
-        color: #9fb2c4; background: rgba(255, 255, 255, 0.05);
+        color: #b3aa9b; background: rgba(255, 255, 255, 0.05);
         border: 1px solid transparent; letter-spacing: 0.06em;
         transition: background 0.15s, color 0.15s;
       }
       .panel-segmented button:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
       .panel-segmented button.active {
-        color: #04120b; background: var(--hud); font-weight: 600;
+        color: #1c1407; background: var(--hud); font-weight: 600;
       }
 
       .panel-slider { margin-bottom: 12px; }
@@ -1083,7 +1083,7 @@
       .panel-slider input[type="range"], .bar-slider input[type="range"] {
         appearance: none; -webkit-appearance: none;
         width: 100%; height: 3px; border-radius: 2px; cursor: pointer;
-        background: rgba(125, 255, 178, 0.25);
+        background: rgba(242, 196, 109, 0.25);
       }
       .panel-slider input[type="range"]::-webkit-slider-thumb,
       .bar-slider input[type="range"]::-webkit-slider-thumb {
@@ -1103,9 +1103,9 @@
 
       .panel-check {
         display: flex; align-items: center; gap: 9px;
-        margin-top: 10px; color: #9fb2c4; cursor: pointer;
+        margin-top: 10px; color: #b3aa9b; cursor: pointer;
       }
-      .panel-check input { accent-color: #7dffb2; width: 14px; height: 14px; cursor: pointer; }
+      .panel-check input { accent-color: #f2c46d; width: 14px; height: 14px; cursor: pointer; }
 
       /* ---- Idle in fullscreen ---------------------------------------------
          Everything drawn over the landscape fades out after a few seconds of
@@ -1127,6 +1127,115 @@
       #panel-tabs, #corner-tools, #director-bar, #free-bar {
         transition: opacity 0.45s ease;
       }
+
+      /* ---- Main menu pickers ------------------------------------------------
+         Side, then machine: two short segmented rows under the wordmark. They
+         set what every mode flies, so they sit above the three ways in. */
+      .c-pick { margin-top: 28px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+      .c-seg {
+        display: inline-flex; padding: 3px; gap: 3px; border-radius: 8px;
+        background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(214, 200, 176, 0.22);
+      }
+      .c-seg button {
+        appearance: none; cursor: pointer; font: inherit; border: 0;
+        font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
+        padding: 9px 16px; border-radius: 6px; color: #b3aa9b; background: transparent;
+        transition: background 0.16s ease, color 0.16s ease;
+      }
+      .c-seg button:hover { color: #f5efe3; background: rgba(242, 196, 109, 0.08); }
+      .c-seg button[aria-checked="true"] { color: #1c1407; background: #f2c46d; font-weight: 600; }
+      .c-seg button:focus-visible { outline: 2px solid rgba(245, 239, 227, 0.75); outline-offset: 2px; }
+      .c-note {
+        min-height: 1.6em; font-size: 11.5px; line-height: 1.6; letter-spacing: 0.03em;
+        color: rgba(236, 229, 216, 0.7); max-width: 420px;
+      }
+      @media (max-width: 560px) {
+        .c-seg { flex-wrap: wrap; justify-content: center; }
+        .c-seg button { padding: 8px 11px; letter-spacing: 0.14em; }
+      }
+
+      /* ---- Screens over the flight -----------------------------------------
+         Campaign, briefing, pause and the combat report share one card: the
+         same glass as the panels, a small tracked eyebrow, a light title, and
+         the text kept to a comfortable measure. */
+      #screens { position: fixed; inset: 0; z-index: 6; pointer-events: none; }
+      .screen {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        padding: 24px 16px 70px; pointer-events: auto;
+        background: rgba(8, 7, 6, 0.58);
+        opacity: 0; transition: opacity 0.35s ease; overflow-y: auto;
+      }
+      .screen.open { opacity: 1; }
+      .screen[hidden] { display: none; }
+      .card {
+        width: min(560px, 100%); margin: auto; padding: 30px 34px 28px;
+        background: rgba(16, 14, 12, 0.86); backdrop-filter: blur(12px);
+        border: 1px solid rgba(242, 196, 109, 0.18); border-radius: 10px;
+        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.55);
+        animation: panel-in 0.5s ease both;
+      }
+      .card.wide { width: min(720px, 100%); }
+      .eyebrow {
+        font-size: 9.5px; letter-spacing: 0.42em; text-transform: uppercase; color: #a39a8b;
+      }
+      .card h2 {
+        margin-top: 10px; font-size: 25px; font-weight: 400; letter-spacing: 0.2em;
+        text-transform: uppercase; color: #f5efe3; line-height: 1.2;
+      }
+      .card h2 .accent { color: var(--hud); }
+      .card .place {
+        margin-top: 8px; font-size: 10.5px; letter-spacing: 0.24em; text-transform: uppercase; color: #8e8577;
+      }
+      .card p.body {
+        margin-top: 20px; font-size: 13.5px; line-height: 1.75; color: #d9d1c2; max-width: 60ch;
+      }
+      .card .rule-line { height: 1px; margin: 22px 0 4px; background: linear-gradient(90deg, rgba(242, 196, 109, 0.4), transparent); }
+      .card .actions { margin-top: 26px; display: flex; gap: 10px; flex-wrap: wrap; }
+      .btn {
+        appearance: none; cursor: pointer; font: inherit;
+        font-size: 10.5px; letter-spacing: 0.2em; text-transform: uppercase;
+        padding: 12px 22px; border-radius: 6px;
+        color: #ece5d7; background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(214, 200, 176, 0.3);
+        transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+      }
+      .btn:hover { background: rgba(242, 196, 109, 0.14); color: #fff; }
+      .btn.primary { background: var(--hud); border-color: var(--hud); color: #1c1407; font-weight: 600; }
+      .btn.primary:hover { background: #f7d696; }
+      .btn:focus-visible { outline: 2px solid rgba(245, 239, 227, 0.75); outline-offset: 3px; }
+      .btn.quiet { border-color: transparent; background: transparent; color: #a39a8b; }
+      .btn.quiet:hover { color: #f5efe3; background: rgba(255, 255, 255, 0.05); }
+
+      .missions { margin-top: 20px; display: flex; flex-direction: column; gap: 4px; }
+      .mission {
+        appearance: none; cursor: pointer; font: inherit; text-align: left; width: 100%;
+        display: grid; grid-template-columns: 28px 1fr auto; align-items: baseline; gap: 4px 14px;
+        padding: 12px 14px; border-radius: 7px; border: 1px solid transparent;
+        color: #ece5d7; background: rgba(255, 255, 255, 0.025);
+        transition: background 0.16s ease, border-color 0.16s ease;
+      }
+      .mission:hover, .mission:focus-visible {
+        background: rgba(242, 196, 109, 0.09); border-color: rgba(242, 196, 109, 0.28); outline: none;
+      }
+      .mission .num { font-size: 11px; color: #8e8577; letter-spacing: 0.1em; }
+      .mission .name { font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; }
+      .mission .meta { grid-column: 2; font-size: 10.5px; letter-spacing: 0.12em; color: #8e8577; text-transform: uppercase; }
+      .mission .mark { grid-row: 1 / span 2; grid-column: 3; align-self: center; font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: #8e8577; }
+      .mission.done .mark { color: var(--hud); }
+
+      .objectives { margin-top: 18px; display: flex; flex-direction: column; gap: 7px; }
+      .objectives div { font-size: 12.5px; color: #ece5d7; display: flex; gap: 10px; align-items: baseline; }
+      .objectives div::before { content: ''; width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--hud); flex: none; transform: translateY(-1px); }
+      .objectives div.optional { color: #a39a8b; }
+
+      .report { margin-top: 18px; display: grid; grid-template-columns: 1fr auto; gap: 9px 24px; }
+      .report span:nth-child(odd) { font-size: 10.5px; letter-spacing: 0.22em; text-transform: uppercase; color: #a39a8b; }
+      .report span:nth-child(even) { font-size: 14px; color: #f5efe3; text-align: right; font-variant-numeric: tabular-nums; }
+      .report .total { color: var(--hud) !important; }
+      .remarks { margin-top: 20px; font-size: 13px; line-height: 1.7; color: #d9d1c2; }
+      .remarks b { color: #a39a8b; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; font-size: 10px; margin-right: 8px; }
+      .outcome-victory h2 .accent { color: var(--hud); }
+      .outcome-defeat h2 .accent { color: #ff7a66; }
     </style>
   </head>
   <body>
@@ -1471,115 +1580,110 @@
       <div id="brand">
         <svg viewBox="0 0 40 40" aria-hidden="true">
           <circle cx="20" cy="20" r="17.5" fill="none"
-                  stroke="#7dffb2" stroke-opacity="0.45" stroke-width="1.3" />
+                  stroke="#f2c46d" stroke-opacity="0.45" stroke-width="1.3" />
           <path d="M2.97 24 A17.5 17.5 0 0 0 37.03 24 Z"
-                fill="#7dffb2" fill-opacity="0.15" />
-          <path d="M2.97 24 H37.03" stroke="#7dffb2" stroke-opacity="0.55" stroke-width="1.1" />
-          <path d="M8 18.5 h6.5 l5.5 4.4 l5.5 -4.4 h6.5" fill="none"
-                stroke="#eaf4ff" stroke-width="2.1"
-                stroke-linecap="round" stroke-linejoin="round" />
+                fill="#f2c46d" fill-opacity="0.15" />
+          <path d="M2.97 24 H37.03" stroke="#f2c46d" stroke-opacity="0.55" stroke-width="1.1" />
+          <!-- A biplane seen head-on: two wings, the struts between them, the nose. -->
+          <path d="M8.5 15.2 H31.5 M10.5 20.6 H29.5 M14 15.2 V20.6 M26 15.2 V20.6" fill="none"
+                stroke="#f5efe3" stroke-width="1.9" stroke-linecap="round" />
+          <circle cx="20" cy="18" r="2.2" fill="#f5efe3" />
         </svg>
         <div>
-          <div class="brand-name">Horizon <span class="accent">F18</span></div>
-          <div class="brand-tag">Flight Simulator</div>
+          <div class="brand-name">Horizon <span class="accent">1917</span></div>
+          <div class="brand-tag">Air War over the Front</div>
         </div>
       </div>
 
       <div id="titles" aria-hidden="true">
         <div class="beat beat-1">
-          <h1 class="t-title">Horizon <span class="accent">F18</span></h1>
+          <h1 class="t-title">Horizon <span class="accent">1917</span></h1>
           <div class="rule"></div>
         </div>
         <div class="beat beat-2">
-          <div class="t-sub">Flight Simulator</div>
+          <div class="t-sub">Air War</div>
         </div>
         <div class="beat beat-3">
-          <!-- Broken on the sentence rather than left to wrap, which orphaned
-               "to fly." on a line of its own. Both halves still fit the beat's
-               width down to the narrowest phone. -->
-          <div class="t-line">Fifteen worlds. Open skies.<br />Endless ways to fly.</div>
+          <div class="t-line">Seven fronts. Open skies.<br />No quarter given.</div>
         </div>
         <div class="beat beat-4">
-          <div class="t-body">Change the environment, weather<br />and the time of the day.</div>
+          <div class="t-body">Fly for the Royal Flying Corps<br />or the Luftstreitkr&auml;fte.</div>
         </div>
         <div class="beat beat-5">
-          <div class="t-body">Switch to any camera perspective<br />and explore at your own pace.</div>
+          <div class="t-body">Change the front, the weather and the hour.<br />Film every fight from any angle.</div>
         </div>
         <a class="t-credit" href="https://sometek.fi" target="_blank" rel="noopener noreferrer"
            >Design: sometek.fi</a>
       </div>
 
       <!--
-        What you are asked once the titles are over: watch, or fly.
-
-        It takes the slot the help panel used to appear in. Landing straight on
-        eighteen key bindings answers a question nobody asked yet — most people
-        arriving want to see the thing move, and that is one button away here.
-        The attract flight carries on behind it exactly as it does behind the
-        titles, so the choice is made over the view rather than over a scrim.
+        The main menu, in the slot the F18's "watch or fly" choice used. The
+        attract dogfight carries on behind it. Side and machine are chosen here
+        once and carried into whichever mode is picked.
       -->
       <div id="choose">
         <svg class="c-mark" viewBox="0 0 40 40" aria-hidden="true">
           <circle cx="20" cy="20" r="17.5" fill="none"
-                  stroke="#7dffb2" stroke-opacity="0.45" stroke-width="1.3" />
+                  stroke="#f2c46d" stroke-opacity="0.45" stroke-width="1.3" />
           <path d="M2.97 24 A17.5 17.5 0 0 0 37.03 24 Z"
-                fill="#7dffb2" fill-opacity="0.15" />
-          <path d="M2.97 24 H37.03" stroke="#7dffb2" stroke-opacity="0.55" stroke-width="1.1" />
-          <path d="M8 18.5 h6.5 l5.5 4.4 l5.5 -4.4 h6.5" fill="none"
-                stroke="#eaf4ff" stroke-width="2.1"
-                stroke-linecap="round" stroke-linejoin="round" />
+                fill="#f2c46d" fill-opacity="0.15" />
+          <path d="M2.97 24 H37.03" stroke="#f2c46d" stroke-opacity="0.55" stroke-width="1.1" />
+          <!-- A biplane seen head-on: two wings, the struts between them, the nose. -->
+          <path d="M8.5 15.2 H31.5 M10.5 20.6 H29.5 M14 15.2 V20.6 M26 15.2 V20.6" fill="none"
+                stroke="#f5efe3" stroke-width="1.9" stroke-linecap="round" />
+          <circle cx="20" cy="18" r="2.2" fill="#f5efe3" />
         </svg>
-        <h1 class="c-title">Horizon <span class="accent">F18</span></h1>
-        <div class="c-sub">Flight Simulator</div>
-        <p class="c-lede">Enjoy the flight on a cinematic autopilot,<br />
-          or take control and fly yourself.</p>
+        <h1 class="c-title">Horizon <span class="accent">1917</span></h1>
+        <div class="c-sub">Air War over the Front</div>
+        <div class="c-pick">
+          <div class="c-seg" id="pick-side" role="radiogroup" aria-label="Side"></div>
+          <div class="c-seg" id="pick-plane" role="radiogroup" aria-label="Aircraft"></div>
+          <p class="c-note" id="pick-note"></p>
+        </div>
         <div class="c-actions">
-          <button id="choose-tour" type="button" class="c-primary">Scenic Flight</button>
-          <button id="choose-manual" type="button">Manual</button>
+          <button id="choose-battle" type="button" class="c-primary">Quick Battle</button>
+          <button id="choose-campaign" type="button">Campaign</button>
+          <button id="choose-watch" type="button">Watch</button>
         </div>
       </div>
 
       <div class="panel">
-        <h1>Horizon <span class="accent">F18</span></h1>
-        <div class="sub">Flight Simulator &middot; F/A-18 &middot; 6-DOF Flight Model</div>
+        <h1>Horizon <span class="accent">1917</span></h1>
+        <div class="sub">Controls &middot; <span id="help-plane">Sopwith Camel</span></div>
         <!-- Rows marked `adv` are hidden until someone asks for help, so the
              first screen is short enough to read before taking off. -->
         <dl class="keys">
-          <dt>&larr; / &rarr;</dt><dd>Turn left / right &mdash; hold longer to bank steeper and turn tighter</dd>
           <dt>&uarr; / &darr;</dt><dd>Pitch &mdash; nose up / nose down</dd>
-          <dt>Shift / Ctrl</dt><dd>Throttle up / down &mdash; past 90% lights the afterburner</dd>
-          <dt class="adv">B</dt><dd class="adv">Wheel brakes (on the ground)</dd>
-          <dt class="adv">L</dt><dd class="adv">Raise / lower the landing gear</dd>
-          <dt class="adv">G</dt><dd class="adv">Toggle flight assists</dd>
-
-          <dt>C</dt><dd>Camera mode cycle</dd>
+          <dt>&larr; / &rarr;</dt><dd>Roll left / right</dd>
+          <dt>Q / E</dt><dd>Rudder left / right</dd>
+          <dt>Shift / Ctrl</dt><dd>Throttle up / down &mdash; <b>1</b>&ndash;<b>0</b> set it directly</dd>
+          <dt>Space</dt><dd>Fire (or hold the left mouse button) &mdash; short bursts: hot guns jam</dd>
+          <dt>B</dt><dd>Drop a bomb</dd>
+          <dt>T</dt><dd>Next target</dd>
+          <dt>C</dt><dd>Camera &mdash; chase, cockpit, target, orbit, cinematic, director, free</dd>
+          <dt>V</dt><dd>Hold to look at your target</dd>
           <dt>M</dt><dd>Mouse as flight stick (press again to release)</dd>
-          <dt>Space</dt><dd>Open / close the <b>Style</b> panel</dd>
-
-          <dt>F</dt><dd>Scenic flight &mdash; cinematic tour over landscape</dd>
-          <dt>N</dt><dd>New world &mdash; generate from a seed.</dd>
-          <dt>T</dt><dd>Time of day - Cycle through</dd>
-          <dt>R</dt><dd>Weather &mdash; clear, clouds, cirrus, hazy, fog, inversion, overcast, rain, storm</dd>
-
-          <dt>Backspace</dt><dd>Reset to takeoff position</dd>
-          <dt class="adv">P</dt><dd class="adv">Pause</dd>
+          <dt>F</dt><dd>Watch &mdash; the autopilot fights for you; any stick input takes it back</dd>
+          <dt>P / Esc</dt><dd>Pause</dd>
           <dt>H</dt><dd><span class="basic">All shortcuts</span><span class="adv">Show this help</span></dd>
 
-          <!-- Second ways to do things already listed above, kept to the end so
-               the list reads as one set of controls rather than two mixed
-               together. `adv` like the rows under it: a heading for keys nobody
-               can see yet would be a heading for nothing. -->
+          <dt class="adv group">World &amp; view</dt>
+          <dt class="adv">O</dt><dd class="adv">Open / close the <b>Style</b> panel</dd>
+          <dt class="adv">Y</dt><dd class="adv">Time of day</dd>
+          <dt class="adv">R</dt><dd class="adv">Weather</dd>
+          <dt class="adv">N</dt><dd class="adv">New front &mdash; a fresh world (quick battle and watch)</dd>
+          <dt class="adv">Tab</dt><dd class="adv">Tactical map on / off</dd>
+
           <dt class="adv group">Alternative controls</dt>
           <dt class="adv">W / S</dt><dd class="adv">Pitch, stick-style &mdash; push down / pull up</dd>
           <dt class="adv">A / D</dt><dd class="adv">Same as left / right</dd>
-          <dt class="adv">Q / E</dt><dd class="adv">Rudder left / right</dd>
+          <dt class="adv">Gamepad</dt><dd class="adv">Right stick flies, left stick throttle, triggers fire</dd>
         </dl>
         <div class="start">
-          Throttle up with <b>Shift</b> and rise up around 150 kt. Use the
+          Land at your own aerodrome and stop to refit: the ground crew patch the
+          airframe, clear the guns and bring more ammunition. Use the
           <b>World</b>, <b>Style</b> and <b>Controls</b> tabs at the bottom of the
-          screen to change the landscape, the weather and how the aircraft flies,
-          and <b>Help</b> for every shortcut.
-          <!-- Once the flight is under way this screen is a pause, not a gate. -->
+          screen to change the front, the weather and how the aircraft flies.
           <div style="margin-top: 14px" class="blink">
             <b class="pre-start">Click anywhere to start</b><b class="in-game">Click anywhere to continue</b>
           </div>
@@ -1587,6 +1691,9 @@
         <div id="error"></div>
       </div>
     </div>
+
+    <!-- Screens that sit over the flight: campaign, briefing, pause, report. Built in Menus.ts. -->
+    <div id="screens"></div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -1,9 +1,9 @@
 {
-  "name": "flight-sim",
+  "name": "horizon-1917",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
-  "description": "Horizon F18 — realistic 3D flight simulator; standalone, runs from file:// with no server",
+  "description": "Horizon 1917 — WW1 air combat over procedural fronts; standalone, runs from file:// or any static server with no dependencies",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -23,7 +23,8 @@
     "check:daylight": "esbuild tools/daylight.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/daylight.mjs --log-level=warning && node node_modules/.cache/daylight.mjs",
     "check:air": "esbuild tools/air.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/air.mjs --log-level=warning && node node_modules/.cache/air.mjs",
     "check:fields": "esbuild tools/fields.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/fields.mjs --log-level=warning && node node_modules/.cache/fields.mjs",
-    "check:structures": "esbuild tools/structures.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/structures.mjs --log-level=warning && node node_modules/.cache/structures.mjs"
+    "check:structures": "esbuild tools/structures.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/structures.mjs --log-level=warning && node node_modules/.cache/structures.mjs",
+    "check:combat": "esbuild tools/combat.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/combat.mjs --log-level=warning && node node_modules/.cache/combat.mjs"
   },
   "dependencies": {
     "three": "^0.169.0"

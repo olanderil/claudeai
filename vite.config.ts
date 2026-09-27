@@ -73,7 +73,7 @@ function escapeRegExp(s: string): string {
 
 export default defineConfig({
   base: './',
-  plugins: [inlineIntoSingleFile('flight-sim.html')],
+  plugins: [inlineIntoSingleFile('index.html')],
   build: {
     target: 'es2020',
     modulePreload: false,

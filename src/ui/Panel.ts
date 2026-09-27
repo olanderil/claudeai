@@ -17,17 +17,17 @@ export interface PanelOption {
 }
 
 export interface PanelApi {
-  /** Start or stop the scenic autopilot. */
+  /** Hand the player's machine to the AI and watch, or take it back. */
   toggleTour(): void;
-  /** Whether the scenic flight is currently flying. */
+  /** Whether the AI is flying the player's machine. */
   touring(): boolean;
-  /** How fast the tour runs against the clock. */
+  /** How fast the battle runs against the clock while watching. */
   tourSpeedOptions: string[];
   getTourSpeed(): number;
   setTourSpeed(index: number): void;
-  /** Reseed the current landscape, leaving a flight in progress airborne. */
+  /** Reseed the current front, keeping the battle going. */
   newWorld(): void;
-  /** Reseed the current landscape and put the aircraft back on the runway. */
+  /** Reseed the current front and restart the battle. */
   newWorldTakeoff(): void;
   currentSeed(): number;
 
@@ -70,19 +70,19 @@ export interface PanelApi {
   getFov(): number;
   setFov(deg: number): void;
 
-  getMode(): 'manual' | 'cruise';
-  setMode(mode: 'manual' | 'cruise'): void;
-  getAssists(): boolean;
-  setAssists(on: boolean): void;
+  /** Up arrow / S pull the nose up by default; this swaps them. */
+  getInvert(): boolean;
+  setInvert(on: boolean): void;
+  /** Rudder follows roll, for keyboard pilots. */
+  getAutoRudder(): boolean;
+  setAutoRudder(on: boolean): void;
 
-  getCentreHud(): boolean;
-  setCentreHud(on: boolean): void;
+  getMap(): boolean;
+  setMap(on: boolean): void;
   showKeyControls(): void;
 
   getSensitivity(axis: 'pitch' | 'roll' | 'rudder'): number;
   setSensitivity(axis: 'pitch' | 'roll' | 'rudder', value: number): void;
-  getMaxBank(): number;
-  setMaxBank(deg: number): void;
 
   resetControls(): void;
 }
@@ -195,7 +195,7 @@ export class Panel {
   // ------------------------------------------------------------------- tabs
 
   private renderWorld(): void {
-    const choose = this.group('Landscape');
+    const choose = this.group('Front');
     choose.appendChild(
       this.segmented(
         this.api.worldOptions,
@@ -215,9 +215,9 @@ export class Panel {
     choose.appendChild(blurb);
     this.body.appendChild(choose);
 
-    const tour = this.group('Scenic Flight');
+    const tour = this.group('Watch');
     const tourButton = this.button(
-      this.api.touring() ? 'End Scenic Flight' : 'Fly a Scenic Tour',
+      this.api.touring() ? 'Take the controls' : 'Let the autopilot fight',
       () => {
         this.api.toggleTour();
         this.sync();
@@ -225,11 +225,11 @@ export class Panel {
     );
     tour.appendChild(tourButton);
     this.refreshers.push(() => {
-      tourButton.textContent = this.api.touring() ? 'End Scenic Flight' : 'Fly a Scenic Tour';
+      tourButton.textContent = this.api.touring() ? 'Take the controls' : 'Let the autopilot fight';
     });
     tour.appendChild(this.note(
-      'Cinematic tour over the landscape. Just enjoy the ride and tweak the visuals '
-      + 'while you fly.',
+      'The AI flies your machine while the cinematic director films the fight. '
+      + 'Any stick input takes it back. The speeds below slow the battle down or hurry it on.',
     ));
     tour.appendChild(this.segmented(
       this.api.tourSpeedOptions,
@@ -247,21 +247,21 @@ export class Panel {
     const row = document.createElement('div');
     row.className = 'panel-buttons';
     row.appendChild(
-      this.button('New World', () => {
+      this.button('New Front', () => {
         this.api.newWorld();
         this.sync();
       }),
     );
     row.appendChild(
-      this.button('New World + Takeoff', () => {
+      this.button('New Front + Restart', () => {
         this.api.newWorldTakeoff();
         this.sync();
       }),
     );
     group.appendChild(row);
     group.appendChild(
-      this.note('A fresh landscape from a new seed. In flight, New World keeps your '
-        + 'altitude and speed; + Takeoff puts you back on the runway.'),
+      this.note('A fresh stretch of the same front from a new seed. New Front keeps the '
+        + 'fight going over the new ground; + Restart begins the sortie again.'),
     );
     this.body.appendChild(group);
   }
@@ -361,29 +361,25 @@ export class Panel {
   private renderControls(): void {
     const columns = [this.column(), this.column(), this.column()];
 
-    const mode = this.group('Flight mode');
+    const mode = this.group('Flying');
     mode.appendChild(
-      this.segmented(
-        ['Manual', 'Cruise'],
-        () => (this.api.getMode() === 'cruise' ? 1 : 0),
-        (i) => this.api.setMode(i === 1 ? 'cruise' : 'manual'),
-      ),
+      this.checkbox('Invert pitch', () => this.api.getInvert(), (v) => this.api.setInvert(v)),
     );
     mode.appendChild(
-      this.checkbox('Flight assists', () => this.api.getAssists(), (v) => this.api.setAssists(v)),
+      this.checkbox('Coordinate turns', () => this.api.getAutoRudder(), (v) => this.api.setAutoRudder(v)),
     );
     mode.appendChild(
-      this.note('Cruise holds altitude and keeps the wings level between inputs.'),
+      this.note('Coordinate turns adds a touch of rudder with the ailerons, as a pilot would '
+        + '— easier on a keyboard. Q and E still work on their own.'),
     );
     columns[1].appendChild(mode);
 
     const display = this.group('Display');
     display.appendChild(
-      this.checkbox('Centre HUD symbology', () => this.api.getCentreHud(),
-        (v) => this.api.setCentreHud(v)),
+      this.checkbox('Tactical map', () => this.api.getMap(), (v) => this.api.setMap(v)),
     );
     display.appendChild(
-      this.note('Centre symbology is the pitch ladder, waterline and flight-path marker.'),
+      this.note('The small heading-up map: the front, the fields, and every machine near you. Tab toggles it.'),
     );
     columns[1].appendChild(display);
 
@@ -401,18 +397,7 @@ export class Panel {
         ),
       );
     }
-    stick.appendChild(
-      this.slider(
-        'Max bank',
-        20,
-        85,
-        1,
-        () => this.api.getMaxBank(),
-        (v) => this.api.setMaxBank(v),
-        (v) => `${Math.round(v)}°`,
-      ),
-    );
-    stick.appendChild(this.note('Steeper bank turns tighter. Hold longer to bank further.'));
+    stick.appendChild(this.note('How far a full keypress or stick throw moves the controls.'));
     stick.appendChild(this.button('Reset to defaults', () => {
       this.api.resetControls();
       this.render('controls');
