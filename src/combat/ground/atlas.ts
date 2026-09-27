@@ -906,7 +906,7 @@ export function groundAtlas(): { map: THREE.DataTexture; normalMap: THREE.DataTe
       }
     }
   }
-  const mk = (data: Uint8Array, srgb: boolean): THREE.DataTexture => {
+  const mk = (data: Uint8Array<ArrayBuffer>, srgb: boolean): THREE.DataTexture => {
     const t = new THREE.DataTexture(data, AW, AH, THREE.RGBAFormat);
     t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
     t.generateMipmaps = true;

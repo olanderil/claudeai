@@ -1040,6 +1040,7 @@ function boot(): void {
   let subject: PlaneVisual | null = null;
   const subjectPos = new THREE.Vector3();
   const listenerVel = new THREE.Vector3();
+  const lastCamPos = new THREE.Vector3();
 
   const game = new Game({
     notify: (t, s, sec) => notify(t, s, sec),
@@ -1569,8 +1570,11 @@ function boot(): void {
       wasAirborne = airborne;
     }
 
-    // Sound follows the camera.
-    listenerVel.copy(telemetrySource?.velocity ?? listenerVel.set(0, 0, 0));
+    // Sound follows the camera, and its doppler wants the camera's own
+    // velocity — which in the free and cinematic views is not the aircraft's.
+    if (frameDt > 0) listenerVel.subVectors(engine.camera.position, lastCamPos).divideScalar(frameDt);
+    if (listenerVel.lengthSq() > 200 * 200) listenerVel.set(0, 0, 0); // a cut, not a move
+    lastCamPos.copy(engine.camera.position);
     sfx.setListener(engine.camera.position, engine.camera.quaternion, listenerVel, rig.mode === 'cockpit');
     sfx.update(frameDt);
 

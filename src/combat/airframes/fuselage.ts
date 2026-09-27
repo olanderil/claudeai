@@ -293,7 +293,7 @@ export function buildFuselage(fus: Fuselage, sp: FusSpec, tubCol: RGB): FusOut {
       for (const o of openings) {
         const d = inside(p.x, p.z, o);
         if (d < 1) {
-          const zc = (o.z0 + o.z1) / 2, a = (o.z1 - o.z0) / 2;
+          const zc = (o.z0 + o.z1) / 2;
           const s = 1 / Math.sqrt(Math.max(d, 1e-6));
           const nx = p.x * s, nz = zc + (p.z - zc) * s;
           Q[k][r].set(nx, fus.topAt(nz, nx), nz);

@@ -409,7 +409,7 @@ export function planSettlements(
 
   for (let t = 0; t < TIERS.length; t++) {
     tier = TIERS[t];
-    const floor = Math.max(25, minElevation - tier.below);
+    const floor = Math.max(4, minElevation - tier.below);
     const ceiling = maxElevation + tier.above;
     candidates = [];
 
@@ -469,7 +469,7 @@ export function planSettlements(
     // Searching for a runway heading costs a few hundred height samples, so it
     // only runs for sites that could actually receive one.
     const strip = wantsStrip
-      ? findStrip(sample, c.x, c.z, c.gx, c.gz, salt, Math.max(25, minElevation - tier.below), tier.stripSpread)
+      ? findStrip(sample, c.x, c.z, c.gx, c.gz, salt, Math.max(4, minElevation - tier.below), tier.stripSpread)
       : null;
 
     villages.push({
@@ -501,7 +501,7 @@ export function planSettlements(
   // No airstrips: strip siting is what decides where an ordinary village ends
   // up standing, and letting a second population bid for them would shift the
   // first one.
-  const floor = Math.max(25, minElevation - tier.below);
+  const floor = Math.max(4, minElevation - tier.below);
   const ceiling = maxElevation + tier.above;
   interface FieldSite { x: number; z: number; elevation: number; rank: number }
   const fieldSites: FieldSite[] = [];

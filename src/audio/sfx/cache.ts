@@ -4,8 +4,10 @@
  * Rendering the whole bank takes a few hundred milliseconds of JavaScript, so
  * it is never done in one go on a live context: `step()` renders one variant
  * at a time from idle callbacks, in the order the game is likely to need them.
- * Anything asked for before its turn is rendered on the spot (one variant only,
- * so the hitch is a single variant's worth).
+ * Anything asked for before its turn is rendered on the spot — but only
+ * `budget` such renders per frame (Sfx resets it each update), so a burst of
+ * first-time requests costs one variant's render, not the whole bank. Past the
+ * budget, requests come back empty and the sound is skipped or deferred.
  */
 
 import { BANK, PREWARM_ORDER, entryRate, type ClipName } from './bank';
@@ -14,6 +16,8 @@ export class ClipCache {
   private readonly map = new Map<ClipName, (AudioBuffer | null)[]>();
   private warmIndex = 0;
   private warmVariant = 0;
+  /** On-demand renders still allowed this frame. */
+  budget = 1;
 
   constructor(private readonly ctx: BaseAudioContext) {}
 
@@ -26,10 +30,14 @@ export class ClipCache {
     return s;
   }
 
-  private render(name: ClipName, i: number): AudioBuffer | null {
+  private render(name: ClipName, i: number, demand = true): AudioBuffer | null {
     const s = this.slots(name);
     const have = s[i];
     if (have) return have;
+    if (demand) {
+      if (this.budget <= 0) return null;
+      this.budget--;
+    }
     const e = BANK[name];
     try {
       const clip = e.make(entryRate(e, this.ctx.sampleRate), i);
@@ -64,6 +72,11 @@ export class ClipCache {
     return !!this.map.get(name)?.[i];
   }
 
+  /** True when the variant is ready, rendering it now if the frame's budget allows. */
+  ensure(name: ClipName, i = 0): boolean {
+    return this.render(name, i) !== null;
+  }
+
   /** Render the next missing variant. False when the bank is complete. */
   step(): boolean {
     while (this.warmIndex < PREWARM_ORDER.length) {
@@ -76,7 +89,7 @@ export class ClipCache {
       }
       const i = this.warmVariant++;
       if (this.has(name, i)) continue;
-      this.render(name, i);
+      this.render(name, i, false);
       return true;
     }
     return false;

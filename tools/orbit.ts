@@ -36,7 +36,10 @@ const DT = 1 / 120;
 const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 1e6);
 const telemetry = { tas: 0 } as Tel;
 const POS = new THREE.Vector3(0, 2000, 0);
+// The rig reads the root's pose, the eye and the cockpit switch; a stub whose
+// position *is* POS keeps the two one and the same.
 const aircraft = { root: { position: POS, quaternion: new THREE.Quaternion() },
+  eyePoint: new THREE.Vector3(0, 1, 0.5),
   setCockpitVisible: () => undefined } as unknown as Parameters<Rig['update']>[1];
 
 function makeRig(): Rig {
@@ -61,7 +64,7 @@ function fly(rig: Rig, seconds: number): { radius: number; height: number; beari
 // The ring widens with airspeed on top of the slider, so this is measured at
 // rest; the airspeed term gets its own case below.
 console.log('DISTANCE  slider -> metres from the aircraft');
-for (const want of [12, 34, 80, 160]) {
+for (const want of [6, 16, 60, 120]) {
   const rig = makeRig();
   rig.setOrbit({ distance: want, rate: 0 });
   const { radius } = fly(rig, 6);
@@ -72,19 +75,20 @@ for (const want of [12, 34, 80, 160]) {
 console.log('\n  and it still opens out with speed');
 {
   const rig = makeRig();
-  rig.setOrbit({ distance: 34, rate: 0 });
+  rig.setOrbit({ distance: 16, rate: 0 });
   telemetry.tas = 0;
   const still = fly(rig, 6).radius;
-  telemetry.tas = 220;
+  telemetry.tas = 50;
   const fast = fly(rig, 6).radius;
   telemetry.tas = 0;
-  console.log(`  0 kt ${still.toFixed(1)} m -> 220 kt ${fast.toFixed(1)} m`);
-  if (!(fast > still + 8)) fail('airspeed no longer widens the ring');
+  console.log(`  0 m/s ${still.toFixed(1)} m -> 50 m/s ${fast.toFixed(1)} m`);
+  if (!(fast > still + 2.5)) fail('airspeed no longer widens the ring');
+  if (fast > still + 8) fail('airspeed widens the ring out of all proportion to a scout');
 }
 
 // -------------------------------------------------------------------- height
 console.log('\nHEIGHT    slider -> metres above the aircraft');
-for (const want of [-20, 0, 9, 80]) {
+for (const want of [-15, 0, 4, 60]) {
   const rig = makeRig();
   rig.setOrbit({ height: want, rate: 0 });
   const { height } = fly(rig, 6);
@@ -147,7 +151,7 @@ console.log('\n  and reversing keeps the bearing rather than jumping across');
 console.log('\nMOUSE     drag raises, wheel opens out, sideways does nothing');
 {
   const rig = makeRig();
-  rig.setOrbit({ distance: 40, height: 10, rate: 0 });
+  rig.setOrbit({ distance: 30, height: 10, rate: 0 });
 
   // Up is negative dy, and up is up.
   const before = rig.orbit.height;
@@ -169,18 +173,18 @@ console.log('\nMOUSE     drag raises, wheel opens out, sideways does nothing');
 
   // The wheel is proportional, so the same click is the same *fraction* near
   // and far — that is the whole reason it is not additive.
-  rig.setOrbit({ distance: 20 });
+  rig.setOrbit({ distance: 10 });
   rig.moveOrbitCamera(0, 300);
-  const nearRatio = rig.orbit.distance / 20;
-  rig.setOrbit({ distance: 100 });
+  const nearRatio = rig.orbit.distance / 10;
+  rig.setOrbit({ distance: 80 });
   rig.moveOrbitCamera(0, 300);
-  const farRatio = rig.orbit.distance / 100;
-  console.log(`  one wheel step: x${nearRatio.toFixed(3)} at 20 m, x${farRatio.toFixed(3)} at 100 m`);
+  const farRatio = rig.orbit.distance / 80;
+  console.log(`  one wheel step: x${nearRatio.toFixed(3)} at 10 m, x${farRatio.toFixed(3)} at 80 m`);
   if (!near(nearRatio, farRatio, 0.001)) fail('the wheel is not proportional');
   if (nearRatio <= 1) fail('the wheel does not open the ring out');
 
   // Sideways is the one gesture this view does not have.
-  rig.setOrbit({ distance: 40, height: 10, rate: 2 });
+  rig.setOrbit({ distance: 30, height: 10, rate: 2 });
   const held = { ...rig.orbit };
   const moved = rig.moveOrbitCamera(0, 0);
   console.log(`  a purely horizontal drag reports moved=${moved}`);
@@ -222,13 +226,13 @@ console.log('\nLIMITS    out-of-range values are pulled back in');
 console.log('\n  and no other view answers it');
 {
   const rig = makeRig();
-  rig.setOrbit({ distance: 40, height: 10 });
-  for (const mode of ['chase', 'cockpit', 'cinematic', 'free', 'director'] as const) {
+  rig.setOrbit({ distance: 30, height: 10 });
+  for (const mode of ['chase', 'cockpit', 'target', 'cinematic', 'free', 'director'] as const) {
     rig.setMode(mode);
     if (rig.moveOrbitCamera(-100, 300)) fail(`the ${mode} view took an orbit gesture`);
   }
-  console.log(`  still ${rig.orbit.distance} m and ${rig.orbit.height} m after five other views`);
-  if (rig.orbit.distance !== 40 || rig.orbit.height !== 10) {
+  console.log(`  still ${rig.orbit.distance} m and ${rig.orbit.height} m after six other views`);
+  if (rig.orbit.distance !== 30 || rig.orbit.height !== 10) {
     fail('another view moved the orbit camera');
   }
 }

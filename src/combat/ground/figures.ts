@@ -47,7 +47,7 @@ export function soldier(p: Parts, m: THREE.Matrix4, side: Side, pose: Pose, cap 
     p.box(0.15, 0.17, 0.48, T(M(0.11, 0.52, -0.22)), cloth);
     p.box(0.14, 0.5, 0.16, T(M(-0.11, 0.25, -0.44)), dark);
     p.box(0.14, 0.5, 0.16, T(M(0.11, 0.25, -0.44)), dark);
-  } else if (pose !== 'upper' && pose !== 'binoc') {
+  } else if (pose !== 'upper') {
     const spread = pose === 'load' ? 0.14 : 0.09;
     p.box(0.15, 0.5, 0.17, T(M(-spread, 0.62, 0, 0, 0, 0.04)), cloth);
     p.box(0.15, 0.5, 0.17, T(M(spread, 0.62, pose === 'load' ? -0.12 : 0, pose === 'load' ? 0.25 : 0, 0, -0.04)), cloth);
@@ -55,7 +55,6 @@ export function soldier(p: Parts, m: THREE.Matrix4, side: Side, pose: Pose, cap 
     p.box(0.13, 0.42, 0.15, T(M(-spread, 0.21, 0)), dark);
     p.box(0.13, 0.42, 0.15, T(M(spread, 0.21, pose === 'load' ? -0.2 : 0)), dark);
   }
-  if (pose === 'upper' || pose === 'binoc') hip = 0.9;
 
   // Torso (tunic skirts flare a little), belt, head.
   const torso = T(M(0, hip, 0, lean));
@@ -107,7 +106,7 @@ export function soldier(p: Parts, m: THREE.Matrix4, side: Side, pose: Pose, cap 
     p.add(new THREE.SphereGeometry(0.14, 10, 4, 0, Math.PI * 2, 0, Math.PI / 2), up(0, 0.88, 0, 0, 0, 0), { color: HELMET.allied, tile: TILE.PAINT, rough: 0.8 });
   } else {
     // Stahlhelm: deep dome with a flared neck guard.
-    p.add(new THREE.SphereGeometry(0.15, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2), up(0, 0.84, 0.01, 0, 0, 0, 1, 1.05, 1.1), { color: HELMET.central, tile: TILE.PAINT, rough: 0.8 });
+    p.add(new THREE.SphereGeometry(0.15, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2), mul(torso, M(0, 0.84, 0.01, 0, 0, 0, 1, 1.05, 1.1)), { color: HELMET.central, tile: TILE.PAINT, rough: 0.8 });
     p.cyl(0.155, 0.19, 0.1, 10, up(0, 0.8, 0.03, -0.15), { color: HELMET.central, tile: TILE.PAINT, rough: 0.8 }, true);
   }
 }

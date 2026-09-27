@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { clamp, damp, smoothstep } from '../util/math';
+import { clamp, damp, moveTowards, smoothstep } from '../util/math';
 import {
-  CinematicDirector, clampElevation, dampDirection, slerpDirection,
+  CinematicDirector, slerpDirection,
   type ShotTweak, type ShotSlot, type LandmarkTarget,
 } from './Cinematic';
 import type { CameraSubject, CameraTelemetry, CombatBody, CombatContext } from './Subject';
@@ -49,15 +49,27 @@ const CHASE_SWING = 5;
 
 /**
  * Target view at the reference scale: how far behind the player on the line
- * from the target, and how far above that line. Sixteen degrees of elevation
- * lifts the bandit clear of the top wing in the picture.
+ * from the target, and how far above that line. Nineteen degrees of elevation
+ * lifts the bandit clear of the top wing in the picture even with the player
+ * standing on a wingtip in a 60° turn, which sweeps the upper wing a good
+ * eighteen degrees up the frame.
  */
-const TARGET_BACK = 11;
-const TARGET_UP = 3.2;
+const TARGET_BACK = 12.5;
+const TARGET_UP = 4.3;
 /** Most the target line is allowed to climb or dive, radians (70°). */
 const TARGET_MAX_ELEVATION = 1.22;
 /** How far from the player toward the target the aim sits, as a fraction of the angle. */
 const TARGET_AIM = 0.58;
+/** Fastest the target line turns, rad/s of arc: a swing, never a whip. */
+const TARGET_TURN = 3.2;
+/** Seconds to ease between the chase and the target view as targets come and go. */
+const TARGET_EASE = 1.1;
+
+/**
+ * How much of a jolt from `addShake` reaches a camera riding the aircraft. At
+ * this, a solid hit (1) rocks the view about half a degree.
+ */
+const IMPULSE_GAIN = 2.2;
 
 /** Cockpit near plane: the gunsight and windscreen are a hand's width away. */
 const COCKPIT_NEAR = 0.05;
@@ -160,12 +172,18 @@ export class CameraRig {
   private lookYaw = 0;
   private lookPitch = 0;
   private padlock = false;
+  /** Which shoulder the padlock is looking over: +1 left, −1 right, 0 not yet. */
+  private padlockSide = 0;
 
   // --------------------------------------------------------------- target
-  /** Damped direction from the player toward the target. */
+  /** Damped direction from the player toward the target, and its parts. */
   private readonly tgtDir = new THREE.Vector3(0, 0, -1);
+  private tgtAz = Math.PI;
+  private tgtEl = 0;
   /** Damped camera up for the target view. */
   private readonly tgtUp = new THREE.Vector3(0, 1, 0);
+  /** Damped direction the target view is lifted off the line in. */
+  private readonly tgtOff = new THREE.Vector3(0, 1, 0);
   /** Where the target was last seen, for easing back out to the chase. */
   private readonly tgtLast = new THREE.Vector3();
   private tgtKnown = false;
@@ -589,8 +607,11 @@ export class CameraRig {
   }
 
   /**
-   * Where the pilot is looking, relative to the nose, radians: positive yaw is
-   * to the right, positive pitch up. Held until changed, and eased — map a
+   * Where the pilot is looking, relative to the nose, radians, in the body's
+   * own sense of rotation: positive yaw turns the head *left* (about the
+   * aircraft's up axis, as three.js turns anything), positive pitch looks up.
+   * For a body-frame direction (x, y, z) that is yaw = atan2(−x, −z),
+   * pitch = atan2(y, hypot(x, z)). Held until changed, and eased — map a
    * mouse or a hat to it. Looking far round (past ±90°) leans the head out to
    * see past the fuselage, as a pilot checking his six does.
    */
@@ -610,6 +631,7 @@ export class CameraRig {
    * key.
    */
   setCockpitPadlock(on: boolean): void {
+    if (on && !this.padlock) this.padlockSide = 0;
     this.padlock = on;
   }
 
@@ -863,9 +885,10 @@ export class CameraRig {
       // tremble because the player's engine does, and only a camera bolted to
       // the airframe feels the engine and the guns at all.
       const own = this.director.subjectRole === 'player';
-      const rumble = (own && t.stalled === true ? 0.35 : 0) + this.impulse * 0.5;
+      const rumble = (own && t.stalled === true ? 0.35 : 0)
+        + this.impulse * IMPULSE_GAIN * (this.director.mounted ? 1 : 0.5);
       const buzz = this.director.mounted ? this.engineBuzz(t, 0.16) + (this.gunfire ? 0.4 : 0) : 0;
-      this.rumble = damp(this.rumble, rumble, 6, dt);
+      this.rumble = damp(this.rumble, rumble, rumble > this.rumble ? 16 : 6, dt);
       this.buzz = damp(this.buzz, buzz, 10, dt);
       this.applyShake();
       // Not while a kill cam borrows an outside view: that view has to snap
@@ -893,13 +916,14 @@ export class CameraRig {
     const buffet = t.stalled === true ? 0.7 : 0;
     const groundRush = smoothstep(60, 12, t.agl) * speedFactor * 0.3;
     const rumble = this.mode === 'free' ? 0
-      : riding ? buffet + groundRush + this.impulse
-        : this.impulse * 0.5;
+      : riding ? buffet + groundRush + this.impulse * IMPULSE_GAIN
+        : this.impulse * IMPULSE_GAIN * 0.5;
     const buzz = !riding ? 0
       : this.mode === 'cockpit'
         ? this.engineBuzz(t, 0.22) + (this.gunfire ? 0.45 : 0)
         : this.engineBuzz(t, 0.1) + (this.gunfire ? 0.28 : 0);
-    this.rumble = this.initialised ? damp(this.rumble, rumble, 6, dt) : rumble;
+    // A jolt arrives at once and dies away; the rest come and go gently.
+    this.rumble = this.initialised ? damp(this.rumble, rumble, rumble > this.rumble ? 16 : 6, dt) : rumble;
     this.buzz = this.initialised ? damp(this.buzz, buzz, 10, dt) : buzz;
 
     let near = this.defaultNear;
@@ -991,14 +1015,17 @@ export class CameraRig {
     if (this.padlock && tg !== null) {
       const eye = this._v1.copy(subject.eyePoint).applyQuaternion(quat).add(pos);
       const b = this._v2.copy(tg.position).sub(eye).applyQuaternion(this._q.copy(quat).invert());
-      let yaw = Math.atan2(b.x, -b.z);
+      let yaw = Math.atan2(-b.x, -b.z);
       const pitch = Math.atan2(b.y, Math.hypot(b.x, b.z));
       // Dead astern the bearing flips from +180° to −180°. A head does not
-      // snap across the back of the seat: it stays on the side it is on.
-      if (Math.abs(yaw) > HEAD_YAW - 0.1 && Math.abs(this.headYaw) > 1.2
-        && Math.sign(yaw) !== Math.sign(this.headYaw)) {
-        yaw = Math.sign(this.headYaw) * HEAD_YAW;
+      // snap across the back of the seat: once it has picked a shoulder to
+      // look over, it keeps it until the target comes round where it can be
+      // seen from the other one.
+      if (Math.abs(yaw) > HEAD_YAW - 0.1 && this.padlockSide !== 0
+        && Math.sign(yaw) !== this.padlockSide) {
+        yaw = this.padlockSide * HEAD_YAW;
       }
+      if (Math.abs(yaw) > 0.3) this.padlockSide = Math.sign(yaw);
       wantYaw = clamp(yaw, -HEAD_YAW, HEAD_YAW);
       wantPitch = clamp(pitch, HEAD_PITCH_DOWN, HEAD_PITCH_UP);
     }
@@ -1012,16 +1039,17 @@ export class CameraRig {
 
     // Looking round leans the head out to see past the fuselage — and back
     // over the shoulder the pilot rises in his seat to see over the decking.
+    // Positive yaw is to the left, so the lean is toward −X.
     const sy = Math.sin(this.headYaw);
     const back = (1 - Math.cos(this.headYaw)) * 0.5;
     this._desired.copy(subject.eyePoint);
-    this._desired.x += sy * 0.1 + Math.sign(sy) * back * 0.08;
+    this._desired.x -= sy * 0.1 + Math.sign(sy) * back * 0.08;
     this._desired.y += back * 0.06 + Math.max(0, -this.headPitch) * 0.03;
     this._desired.applyQuaternion(quat).add(pos);
     this.camera.position.copy(this._desired);
 
     // Body attitude, then the head: yaw about the body's up, then pitch.
-    this._q.setFromAxisAngle(AXIS_Y, -this.headYaw);
+    this._q.setFromAxisAngle(AXIS_Y, this.headYaw);
     this._q2.setFromAxisAngle(AXIS_X, this.headPitch);
     this.camera.quaternion.copy(this.cockpitQuat).multiply(this._q).multiply(this._q2);
     this.camera.up.set(0, 1, 0).applyQuaternion(this.cockpitQuat);
@@ -1057,39 +1085,78 @@ export class CameraRig {
     // Coming in from the plain chase, there is no old line worth swinging
     // from: take the new one as it is and let the blend do the easing.
     const fromChase = this.tgtBlend === 0;
+    // A fixed-length ease rather than an exponential one: with a bandit astern
+    // the target view is on the far side of the aeroplane, and an exponential
+    // start covers most of that swing in its first few frames.
     const want = tg !== null ? 1 : 0;
     if (!this.initialised) this.tgtBlend = want;
-    else this.tgtBlend = damp(this.tgtBlend, want, 4, dt);
-    if (this.tgtBlend > 0.999) this.tgtBlend = 1;
-    if (this.tgtBlend < 0.001) this.tgtBlend = 0;
+    else this.tgtBlend = moveTowards(this.tgtBlend, want, dt / TARGET_EASE);
 
-    // The line from the player to the target, clamped and damped.
+    // The line from the player to the target, as a bearing and an elevation,
+    // each damped on its own. Damping the direction as a vector turns it along
+    // the great circle, and for a bandit crossing overhead the great circle runs
+    // through the zenith — where "up" for the camera stops existing. Kept as a
+    // bearing, the line swings round the vertical instead of over it, and the
+    // elevation never passes ±70°.
     const raw = this._v1.copy(this.tgtLast).sub(pos);
     if (raw.lengthSq() < 1e-4 || (!this.tgtKnown && tg === null)) {
       raw.set(0, 0, -1).applyQuaternion(quat);
     }
-    raw.normalize();
-    clampElevation(raw, TARGET_MAX_ELEVATION);
+    const flat = Math.hypot(raw.x, raw.z);
+    const rawEl = clamp(Math.atan2(raw.y, flat), -TARGET_MAX_ELEVATION, TARGET_MAX_ELEVATION);
+    // Straight overhead there is no bearing worth following: hold the last.
+    const rawAz = flat > 1e-3 * raw.length() ? Math.atan2(raw.x, raw.z) : this.tgtAz;
     if (!this.initialised || !this.tgtKnown || fromChase) {
-      this.tgtDir.copy(raw);
+      this.tgtAz = rawAz;
+      this.tgtEl = rawEl;
       this.tgtKnown = tg !== null;
     } else {
-      dampDirection(this.tgtDir, raw, 6, 3.2, dt);
+      let dAz = rawAz - this.tgtAz;
+      while (dAz > Math.PI) dAz -= Math.PI * 2;
+      while (dAz < -Math.PI) dAz += Math.PI * 2;
+      // A bearing is cheap to turn near the vertical — it is a small circle —
+      // so the limit is on the arc the camera actually travels.
+      const azLimit = (TARGET_TURN * dt) / Math.max(Math.cos(this.tgtEl), 0.3);
+      this.tgtAz += clamp(dAz * (1 - Math.exp(-6 * dt)), -azLimit, azLimit);
+      const dEl = rawEl - this.tgtEl;
+      this.tgtEl += clamp(dEl * (1 - Math.exp(-6 * dt)), -TARGET_TURN * dt, TARGET_TURN * dt);
     }
-    // Up is world up, square to the line. The clamp keeps the line far enough
-    // off vertical for this always to exist.
-    const upWant = this._v2.set(0, 1, 0).addScaledVector(this.tgtDir, -this.tgtDir.y).normalize();
-    if (!this.initialised) this.tgtUp.copy(upWant);
-    else this.tgtUp.lerp(upWant, 1 - Math.exp(-10 * dt)).normalize();
+    const ce = Math.cos(this.tgtEl);
+    this.tgtDir.set(ce * Math.sin(this.tgtAz), Math.sin(this.tgtEl), ce * Math.cos(this.tgtAz));
+    // Which way is "above the line". World up, square to it — the clamp keeps
+    // the line far enough off vertical for that always to exist — bent toward
+    // the aeroplane's own up. In a steep turn the wings stand across the
+    // picture, and a bandit put straight up the screen sits behind the top
+    // wing; put up the *canopy* instead, he sits between the wings, clear. The
+    // lens's own roll takes a little of the bank too, as the chase view does.
+    const d = this.tgtDir;
+    const world = this._v2.set(0, 1, 0).addScaledVector(d, -d.y).normalize();
+    const body = this._step.set(0, 1, 0).applyQuaternion(quat);
+    body.addScaledVector(d, -body.dot(d));
+    const across = smoothstep(0.3, 0.8, body.length());
+    if (across > 0) body.normalize();
+    const offWant = this._v1.copy(world).multiplyScalar(1 - 0.65 * across)
+      .addScaledVector(body, 0.65 * across).normalize();
+    const upWant = world.multiplyScalar(1 - 0.3 * across).addScaledVector(body, 0.3 * across)
+      .normalize();
+    if (!this.initialised) {
+      this.tgtUp.copy(upWant);
+      this.tgtOff.copy(offWant);
+    } else {
+      this.tgtUp.lerp(upWant, 1 - Math.exp(-8 * dt)).normalize();
+      this.tgtOff.lerp(offWant, 1 - Math.exp(-6 * dt)).normalize();
+    }
 
     const back = (TARGET_BACK + clamp(t.tas, 0, 80) * 0.03) * s;
-    const tPos = this._desired.copy(pos)
-      .addScaledVector(this.tgtDir, -back)
-      .addScaledVector(this.tgtUp, TARGET_UP * s);
+    const tOff = this._desired.copy(this.tgtDir).multiplyScalar(-back)
+      .addScaledVector(this.tgtOff, TARGET_UP * s);
 
-    // Blend the two poses: position linearly, aim by angle, up linearly.
+    // Blend the two poses round the player rather than through him: with a
+    // bandit astern the target view is *ahead* of the aeroplane, and a straight
+    // line from the chase boom to there runs through the cockpit.
     const b = smoothstep(0, 1, this.tgtBlend);
-    this.position.copy(chasePos).lerp(tPos, b);
+    swingAround(chasePos.sub(pos), tOff, b, this.position);
+    this.position.add(pos);
     const tgtScale = scaleOf(tg?.cameraScale);
     // A target that has come to sit on the lens (a collision course seen from
     // behind the player) is not allowed to put the camera inside it.
@@ -1105,18 +1172,26 @@ export class CameraRig {
       const toP = this._v2.copy(pos).sub(this.position);
       const dP = Math.max(toP.length(), 1);
       toP.divideScalar(dP);
-      const toT = this._v3.copy(this.tgtLast).sub(this.position);
-      const dT = Math.max(toT.length(), 1);
-      toT.divideScalar(dT);
-      const aimT = slerpDirection(toP, toT, TARGET_AIM, this._v4);
+      // Aimed at where the damped line says the target is, not at the target:
+      // a new one on the far side of the sky is swung onto, not cut to. The
+      // lens is fitted to the real one whenever it is anywhere near the frame.
+      const range = this.tgtLast.distanceTo(pos);
+      const toV = this._v3.copy(pos).addScaledVector(this.tgtDir, range).sub(this.position);
+      const dV = Math.max(toV.length(), 1);
+      toV.divideScalar(dV);
+      const aimT = slerpDirection(toP, toV, TARGET_AIM, this._v4);
       slerpDirection(toChase, aimT, b, this._lookAt);
       this.camera.up.copy(this._blendUp.copy(this.up).lerp(this.tgtUp, b).normalize());
-      // How wide the lens must be to hold both, measured in the camera's own
-      // frame so the wider horizontal field is used where it is available.
       this.target.copy(this.position).add(this._lookAt);
       this.camera.position.copy(this.position);
       this.camera.lookAt(this.target);
-      fit = this.fitBoth(toP, dP, s, toT, dT, tgtScale) * b;
+      // How wide the lens must be to hold both, measured in the camera's own
+      // frame so the wider horizontal field is used where it is available.
+      const toT = this._v4.copy(this.tgtLast).sub(this.position);
+      const dT = Math.max(toT.length(), 1);
+      toT.divideScalar(dT);
+      const real = toT.angleTo(this._lookAt) < 1.1;
+      fit = this.fitBoth(toP, dP, s, real ? toT : toV, real ? dT : dV, tgtScale) * b;
     } else {
       this._lookAt.copy(toChase);
       this.target.copy(this.position).add(this._lookAt);
@@ -1139,17 +1214,17 @@ export class CameraRig {
     toT: THREE.Vector3, dT: number, sT: number): number {
     this.camera.updateMatrixWorld(true);
     const inv = this._m.copy(this.camera.matrixWorld).invert();
-    const tanHalfH = (dir: THREE.Vector3, pad: number): [number, number] => {
-      const v = this._step.copy(dir).transformDirection(inv);
+    // Horizontal and vertical half-angles off the lens axis, each padded by
+    // the aircraft round it.
+    let needX = 0;
+    let needY = 0;
+    for (let k = 0; k < 2; k++) {
+      const v = this._step.copy(k === 0 ? toP : toT).transformDirection(inv);
+      const pad = k === 0 ? Math.atan((3.5 * s) / dP) : Math.atan((3.5 * sT) / dT);
       const forward = Math.max(-v.z, 0.05);
-      const ax = Math.atan(Math.abs(v.x) / forward) + pad;
-      const ay = Math.atan(Math.abs(v.y) / forward) + pad;
-      return [ax, ay];
-    };
-    const [px, py] = tanHalfH(toP, Math.atan((3.5 * s) / dP));
-    const [tx, ty] = tanHalfH(toT, Math.atan((3.5 * sT) / dT));
-    const needY = Math.max(py, ty);
-    const needX = Math.max(px, tx);
+      needX = Math.max(needX, Math.atan(Math.abs(v.x) / forward) + pad);
+      needY = Math.max(needY, Math.atan(Math.abs(v.y) / forward) + pad);
+    }
     const aspect = this.camera.aspect > 0 ? this.camera.aspect : 16 / 9;
     // Horizontal half-angle back to the vertical field it implies.
     const fromX = Math.atan(Math.tan(Math.min(needX, 1.5)) / aspect);
@@ -1421,6 +1496,36 @@ const AXIS_Y = new THREE.Vector3(0, 1, 0);
 /** A subject's scale, defended: the camera must never be the reason for a NaN. */
 function scaleOf(v: number | undefined): number {
   return v !== undefined && Number.isFinite(v) && v > 0 ? clamp(v, 0.3, 6) : 1;
+}
+
+const _sa = new THREE.Vector3();
+const _sb = new THREE.Vector3();
+const _sm = new THREE.Vector3();
+const _su = new THREE.Vector3();
+const _sd = new THREE.Vector3();
+
+/**
+ * Blend two offsets from a centre by swinging round it, into `out`: the
+ * direction turns, the length eases. Through the midpoint of the two
+ * directions — which is the great circle when they are apart — and, as they
+ * come to point opposite ways and there stops being a shortest way round,
+ * through a midpoint lifted over the top instead. Never under, never through.
+ */
+function swingAround(a: THREE.Vector3, b: THREE.Vector3, t: number, out: THREE.Vector3): THREE.Vector3 {
+  const la = a.length();
+  const lb = b.length();
+  if (t <= 0 || la < 1e-6 || lb < 1e-6) return out.copy(t >= 1 ? b : a);
+  if (t >= 1) return out.copy(b);
+  const ua = _sa.copy(a).divideScalar(la);
+  const ub = _sb.copy(b).divideScalar(lb);
+  const mid = _sm.copy(ua).add(ub);
+  // 0 while they are within 120° of each other, 1 when directly opposite.
+  const lift = Math.max(0, 1 - mid.length());
+  _su.set(0, 1, 0).addScaledVector(ua, -ua.y);
+  if (_su.lengthSq() < 1e-8) _su.set(1, 0, 0);
+  mid.addScaledVector(_su.normalize(), lift * 2).normalize();
+  const dir = t < 0.5 ? slerpDirection(ua, mid, t * 2, _sd) : slerpDirection(mid, ub, t * 2 - 1, _sd);
+  return out.copy(dir).multiplyScalar(la + (lb - la) * t);
 }
 
 /** Push `p` out to at least `gap` from `centre`, along the line between them. */

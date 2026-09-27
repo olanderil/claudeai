@@ -32,15 +32,17 @@ const fail = (why: string): void => {
 };
 
 /** The closest a fly-by ever lets the aircraft pass — mirrors `MIN_MISS` in the rig. */
-const MIN_MISS = 14;
+const MIN_MISS = 6;
+/** A scout at a brisk cruise, m/s. */
+const SPEED = 50;
 
 const DT = 1 / 120;
 const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 1e6);
 const POS = new THREE.Vector3(0, 2000, 0);
 const quat = new THREE.Quaternion();
-const aircraft = { root: { position: POS, quaternion: quat },
+const aircraft = { root: { position: POS, quaternion: quat }, eyePoint: new THREE.Vector3(0, 1, 0.5),
   setCockpitVisible: () => undefined } as unknown as Parameters<Rig['update']>[1];
-const tel = { tas: 220 } as Parameters<Rig['update']>[2];
+const tel = { tas: SPEED, agl: 2000 } as Parameters<Rig['update']>[2];
 
 /** Ground height for the case in hand: bottomless by default, flat when asked. */
 let ground: (x: number, z: number) => number = () => -Infinity;
@@ -59,16 +61,16 @@ function makeRig(worldLocked: boolean): Rig {
 
 // ------------------------------------------------------------------ the lock
 //
-// Straight and level at 220 m/s, which is the case the old implementation got
+// Straight and level at a scout's cruise, which is the case the old implementation got
 // wrong: nothing turns, so a bearing-only difference shows nothing at all.
-console.log('THE TWO LOCKS, flying straight and level at 220 m/s');
+console.log(`THE TWO LOCKS, flying straight and level at ${SPEED} m/s`);
 {
   const track = (worldLocked: boolean): { start: number; after: number; max: number } => {
     const rig = makeRig(worldLocked);
     const start = camera.position.distanceTo(POS);
     let max = start;
     for (let i = 0; i < 120 * 8; i++) {
-      POS.z -= 220 * DT;
+      POS.z -= SPEED * DT;
       rig.update(DT, aircraft, tel);
       max = Math.max(max, camera.position.distanceTo(POS));
     }
@@ -86,7 +88,7 @@ console.log('THE TWO LOCKS, flying straight and level at 220 m/s');
   console.log(`  world-locked     ${world.start.toFixed(1)} m -> ${world.after.toFixed(1)} m `
     + `(furthest ${world.max.toFixed(0)} m)`);
   // It must let the aircraft go — a long way, not a few metres of lag.
-  if (world.max < 200) {
+  if (world.max < 120) {
     fail(`world-locked only let the aircraft reach ${world.max.toFixed(0)} m — it is still following`);
   }
   if (world.max <= air.max * 4) fail('the two locks still produce nearly the same shot');
@@ -98,13 +100,13 @@ console.log('\n  and the world lock takes fresh station once the aircraft is gon
   const stations: number[] = [];
   let last = camera.position.clone();
   for (let i = 0; i < 120 * 40; i++) {
-    POS.z -= 220 * DT;
+    POS.z -= SPEED * DT;
     rig.update(DT, aircraft, tel);
     // A plant is the only way this camera ever moves.
     if (camera.position.distanceTo(last) > 1) stations.push(i / 120);
     last = camera.position.clone();
   }
-  console.log(`  ${stations.length} re-plants over 40 s at 220 m/s`);
+  console.log(`  ${stations.length} re-plants over 40 s at ${SPEED} m/s`);
   const each = 40 / Math.max(stations.length, 1);
   console.log(`  about ${each.toFixed(1)} s a shot`);
   if (stations.length < 2) fail('the shot never renews — it ends as a dot on the horizon');
@@ -121,7 +123,7 @@ console.log('\n  and an empty mouse gesture every frame does not unplant it');
   const rig = makeRig(true);
   const planted = camera.position.clone();
   for (let i = 0; i < 120 * 3; i++) {
-    POS.z -= 220 * DT;
+    POS.z -= SPEED * DT;
     rig.moveFreeCamera(0, 0, 0, false);
     rig.update(DT, aircraft, tel);
   }
@@ -129,13 +131,13 @@ console.log('\n  and an empty mouse gesture every frame does not unplant it');
   const gap = camera.position.distanceTo(POS);
   console.log(`  camera moved ${moved.toFixed(2)} m; the aircraft is ${gap.toFixed(0)} m away`);
   if (moved > 1) fail(`an empty gesture moved the planted camera ${moved.toFixed(1)} m`);
-  if (gap < 200) fail('the camera followed the aircraft despite being planted');
+  if (gap < 40) fail('the camera followed the aircraft despite being planted');
 }
 
 console.log('\n  and a real gesture does take fresh station');
 {
   const rig = makeRig(true);
-  for (let i = 0; i < 120; i++) { POS.z -= 220 * DT; rig.update(DT, aircraft, tel); }
+  for (let i = 0; i < 120; i++) { POS.z -= SPEED * DT; rig.update(DT, aircraft, tel); }
   const before = camera.position.clone();
   rig.moveFreeCamera(40, 0, 0, false);
   rig.update(DT, aircraft, tel);
@@ -151,7 +153,7 @@ console.log('\n  and the shot is a whip — the aircraft comes in, passes, and g
   const rig = makeRig(true);
   const seen: number[] = [];
   for (let i = 0; i < 120 * 8; i++) {
-    POS.z -= 220 * DT;
+    POS.z -= SPEED * DT;
     rig.moveFreeCamera(0, 0, 0, false);
     rig.update(DT, aircraft, tel);
     seen.push(camera.position.distanceTo(POS));
@@ -162,8 +164,9 @@ console.log('\n  and the shot is a whip — the aircraft comes in, passes, and g
     + `${(at / 120).toFixed(1)} s  ->  ${seen[seen.length - 1].toFixed(0)} m away`);
   if (at === 0) fail('the aircraft never approaches — the camera is planted behind it');
   if (at === seen.length - 1) fail('the aircraft never gets past the camera');
-  if (seen[0] - closest < 300) fail('the approach is too short to read as one');
-  if (seen[seen.length - 1] - closest < 300) fail('the departure is too short to read as one');
+  if (seen[0] - closest < 150) fail('the approach is too short to read as one');
+  if (seen[seen.length - 1] - closest < 100) fail('the departure is too short to read as one');
+  if (seen[0] > 450) fail(`planted ${seen[0].toFixed(0)} m out — a scout is a dot from there`);
 }
 
 // Reframing mid-pass. The camera has to move — that is what the drag is for —
@@ -175,7 +178,7 @@ console.log('\n  and a drag changes the angle without restarting the pass');
   const approach: number[] = [];
   // Run a third of the way in, then drag.
   for (let i = 0; i < 120 * 2; i++) {
-    POS.z -= 220 * DT;
+    POS.z -= SPEED * DT;
     rig.moveFreeCamera(0, 0, 0, false);
     rig.update(DT, aircraft, tel);
     approach.push(camera.position.distanceTo(POS));
@@ -191,28 +194,28 @@ console.log('\n  and a drag changes the angle without restarting the pass');
     + `aircraft now ${after.toFixed(0)} m away`);
   if (stationMoved < 1) fail('the drag did not move the camera at all');
   // The pass is measured by how far the aeroplane still has to come. A restart
-  // would put that back to the full lead — nearly 900 m — in one frame.
-  if (after > before + 120) {
+  // would put that back to the full lead — 250 m — in one frame.
+  if (after > before + 30) {
     fail(`the drag sent the aircraft back out to ${after.toFixed(0)} m — the pass restarted`);
   }
 
   // And it must still finish the pass afterwards.
   let closest = after;
   for (let i = 0; i < 120 * 8; i++) {
-    POS.z -= 220 * DT;
+    POS.z -= SPEED * DT;
     rig.moveFreeCamera(0, 0, 0, false);
     rig.update(DT, aircraft, tel);
     closest = Math.min(closest, camera.position.distanceTo(POS));
   }
   console.log(`  and it still whips past, at ${closest.toFixed(0)} m`);
-  if (closest > 150) fail(`after the drag the aircraft only reached ${closest.toFixed(0)} m`);
+  if (closest > 40) fail(`after the drag the aircraft only reached ${closest.toFixed(0)} m`);
 }
 
 console.log('\n  and the wheel sets how close it passes, on the same pass');
 {
   const rig = makeRig(true);
   for (let i = 0; i < 120 * 2; i++) {
-    POS.z -= 220 * DT;
+    POS.z -= SPEED * DT;
     rig.moveFreeCamera(0, 0, 0, false);
     rig.update(DT, aircraft, tel);
   }
@@ -222,14 +225,14 @@ console.log('\n  and the wheel sets how close it passes, on the same pass');
   const after = camera.position.distanceTo(POS);
   let closest = after;
   for (let i = 0; i < 120 * 8; i++) {
-    POS.z -= 220 * DT;
+    POS.z -= SPEED * DT;
     rig.moveFreeCamera(0, 0, 0, false);
     rig.update(DT, aircraft, tel);
     closest = Math.min(closest, camera.position.distanceTo(POS));
   }
   console.log(`  wheeled out at ${before.toFixed(0)} m (still ${after.toFixed(0)} m out), `
     + `then passed at ${closest.toFixed(0)} m instead of the ${MIN_MISS} m floor`);
-  if (after > before + 120) fail('the wheel restarted the pass');
+  if (after > before + 30) fail('the wheel restarted the pass');
   if (closest < MIN_MISS * 1.3) fail(`the wheel did not widen the pass past ${MIN_MISS} m`);
 }
 
@@ -238,7 +241,7 @@ console.log('\n  and dragging a departing aircraft does not fly it back at you')
   const rig = makeRig(true);
   // Well past the camera and going.
   for (let i = 0; i < 120 * 6; i++) {
-    POS.z -= 220 * DT;
+    POS.z -= SPEED * DT;
     rig.moveFreeCamera(0, 0, 0, false);
     rig.update(DT, aircraft, tel);
   }
@@ -247,7 +250,7 @@ console.log('\n  and dragging a departing aircraft does not fly it back at you')
   rig.update(DT, aircraft, tel);
   const after = camera.position.distanceTo(POS);
   console.log(`  departing at ${before.toFixed(0)} m; after the drag ${after.toFixed(0)} m`);
-  if (after < before - 200) fail('the drag pulled the departing aircraft back towards the camera');
+  if (after < before - 40) fail('the drag pulled the departing aircraft back towards the camera');
 }
 
 // The case the level-flight version got away with. Under power the aeroplane
@@ -261,16 +264,18 @@ console.log('\n  and it works in a climb, where the nose is not the track');
   const climb = 15 * (Math.PI / 180);
   quat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), climb + 8 * (Math.PI / 180));
   const seen: number[] = [];
-  for (let i = 0; i < 120 * 12; i++) {
-    POS.z -= Math.cos(climb) * 220 * DT;
-    POS.y += Math.sin(climb) * 220 * DT;
+  // Long enough for a second plant: the first was taken in level flight, before
+  // the climb began, and it is the one taken *on* the climb that is the test.
+  for (let i = 0; i < 120 * 20; i++) {
+    POS.z -= Math.cos(climb) * SPEED * DT;
+    POS.y += Math.sin(climb) * SPEED * DT;
     rig.moveFreeCamera(0, 0, 0, false);
     rig.update(DT, aircraft, tel);
     seen.push(camera.position.distanceTo(POS));
   }
   const closest = Math.min(...seen);
   console.log(`  ${seen[0].toFixed(0)} m in  ->  ${closest.toFixed(0)} m closest`);
-  if (closest > 120) fail(`the aircraft never got nearer than ${closest.toFixed(0)} m in a climb`);
+  if (closest > 30) fail(`the aircraft never got nearer than ${closest.toFixed(0)} m in a climb`);
   quat.identity();
 }
 
@@ -289,7 +294,7 @@ console.log('\n  and the lead is right at a poor frame rate too');
     let closest = Infinity;
     let first = 0;
     for (let i = 0; i < fps * 20; i++) {
-      POS.z -= 220 * simPerFrame;
+      POS.z -= SPEED * simPerFrame;
       rig.moveFreeCamera(0, 0, 0, false);
       rig.update(frame, aircraft, tel);
       const d = camera.position.distanceTo(POS);
@@ -298,8 +303,8 @@ console.log('\n  and the lead is right at a poor frame rate too');
     }
     console.log(`  ${String(fps).padStart(3)} fps: planted ${first.toFixed(0)} m ahead, `
       + `passed at ${closest.toFixed(0)} m`);
-    if (first > 1400) fail(`at ${fps} fps the camera was planted ${first.toFixed(0)} m ahead`);
-    if (closest > 120) fail(`at ${fps} fps the aircraft never got nearer than ${closest.toFixed(0)} m`);
+    if (first > 400) fail(`at ${fps} fps the camera was planted ${first.toFixed(0)} m ahead`);
+    if (closest > 30) fail(`at ${fps} fps the aircraft never got nearer than ${closest.toFixed(0)} m`);
   }
 }
 
@@ -310,16 +315,18 @@ console.log('\n  and the lead is right at a poor frame rate too');
 console.log('\n  and a descending track does not plant the camera underground');
 {
   ground = () => 0;
+  // Low, because a scout fights low: a hundred metres up, a 25° dive plants
+  // the station two hundred and fifty metres down the track — underground.
   for (const [label, dive] of [['shallow', 5], ['steep', 25]] as const) {
     const rig = makeRig(true);
-    POS.set(0, 1500, 0);
+    POS.set(0, 100, 0);
     const rad = dive * (Math.PI / 180);
     quat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -rad);
     let closest = Infinity;
     let lowest = Infinity;
-    for (let i = 0; i < 120 * 12 && POS.y > 200; i++) {
-      POS.z -= Math.cos(rad) * 220 * DT;
-      POS.y -= Math.sin(rad) * 220 * DT;
+    for (let i = 0; i < 120 * 12 && POS.y > 15; i++) {
+      POS.z -= Math.cos(rad) * SPEED * DT;
+      POS.y -= Math.sin(rad) * SPEED * DT;
       rig.moveFreeCamera(0, 0, 0, false);
       rig.update(DT, aircraft, tel);
       closest = Math.min(closest, camera.position.distanceTo(POS));
@@ -328,7 +335,7 @@ console.log('\n  and a descending track does not plant the camera underground');
     console.log(`  ${label} descent (${dive}deg): passed at ${closest.toFixed(0)} m, `
       + `camera never below ${lowest.toFixed(0)} m`);
     if (lowest < 0) fail(`the camera went ${(-lowest).toFixed(0)} m underground`);
-    if (closest > 150) fail(`the aircraft passed ${closest.toFixed(0)} m away — the plant left the path`);
+    if (closest > 40) fail(`the aircraft passed ${closest.toFixed(0)} m away — the plant left the path`);
   }
   quat.identity();
   POS.set(0, 2000, 0);
@@ -338,12 +345,12 @@ console.log('\n  and a descending track does not plant the camera underground');
 console.log('\n  and a reset takes fresh station rather than watching from the old world');
 {
   const rig = makeRig(true);
-  for (let i = 0; i < 120 * 2; i++) { POS.z -= 220 * DT; rig.update(DT, aircraft, tel); }
+  for (let i = 0; i < 120 * 2; i++) { POS.z -= SPEED * DT; rig.update(DT, aircraft, tel); }
   POS.set(40_000, 3000, -25_000); // a new landscape, or a flight reset
-  for (let i = 0; i < 4; i++) { POS.z -= 220 * DT; rig.update(DT, aircraft, tel); }
+  for (let i = 0; i < 4; i++) { POS.z -= SPEED * DT; rig.update(DT, aircraft, tel); }
   const gap = camera.position.distanceTo(POS);
   console.log(`  after a 47 km jump the camera is ${gap.toFixed(0)} m from the aircraft`);
-  if (gap > 2000) fail(`the camera stayed ${(gap / 1000).toFixed(0)} km behind`);
+  if (gap > 600) fail(`the camera stayed ${(gap / 1000).toFixed(1)} km behind`);
   POS.set(0, 2000, 0);
 }
 
@@ -357,14 +364,43 @@ console.log('\n  and it does not fly through the lens, whatever the framing');
     rig.setFreeLock(true);
     let closest = Infinity;
     for (let i = 0; i < 120 * 8; i++) {
-      POS.z -= 220 * DT;
+      POS.z -= SPEED * DT;
       rig.moveFreeCamera(0, 0, 0, false);
       rig.update(DT, aircraft, tel);
       closest = Math.min(closest, camera.position.distanceTo(POS));
     }
     console.log(`  view ${slot + 1} (${name}): passes at ${closest.toFixed(1)} m`);
-    if (closest < 10) fail(`view ${slot + 1} passes ${closest.toFixed(1)} m from the lens`);
+    if (closest < MIN_MISS * 0.8) fail(`view ${slot + 1} passes ${closest.toFixed(1)} m from the lens`);
   }
+}
+
+// A different aeroplane is a cut, not a very fast one. Watching another
+// machine, or respawning, hands the rig a new subject somewhere else entirely —
+// and a planted camera must not keep watching the spot the old one was.
+console.log('\n  and a new subject takes fresh station, and gets the old cockpit put away');
+{
+  const rig = makeRig(true);
+  for (let i = 0; i < 120 * 2; i++) { POS.z -= SPEED * DT; rig.update(DT, aircraft, tel); }
+  const otherPos = new THREE.Vector3(3000, 800, 1500);
+  let oldCockpit: boolean | null = null;
+  const first = { root: { position: POS, quaternion: quat }, eyePoint: new THREE.Vector3(0, 1, 0.5),
+    setCockpitVisible: (on: boolean) => { oldCockpit = on; } } as unknown as Parameters<Rig['update']>[1];
+  const second = { root: { position: otherPos, quaternion: new THREE.Quaternion() },
+    eyePoint: new THREE.Vector3(0, 1, 0.5), velocity: new THREE.Vector3(0, 0, -SPEED),
+    setCockpitVisible: () => undefined } as unknown as Parameters<Rig['update']>[1];
+  rig.setMode('cockpit');
+  rig.update(DT, first, tel);
+  const shownBefore = oldCockpit;
+  rig.setMode('free');
+  rig.setFreeLock(true);
+  rig.update(DT, first, tel);
+  rig.update(DT, second, tel);
+  const gap = camera.position.distanceTo(otherPos);
+  console.log(`  first subject's cockpit ${shownBefore ? 'shown' : 'hidden'} in the cockpit view, `
+    + `${oldCockpit ? 'still shown' : 'hidden'} after the switch; camera ${gap.toFixed(0)} m from the new one`);
+  if (shownBefore !== true) fail('the cockpit view did not show the cockpit');
+  if (oldCockpit !== false) fail('the old subject was left with its cockpit showing');
+  if (gap > 600) fail(`after the switch the camera is ${gap.toFixed(0)} m from the new subject`);
 }
 
 // --------------------------------------------------------------- the reframe

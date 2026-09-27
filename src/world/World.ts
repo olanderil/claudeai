@@ -3,12 +3,11 @@ import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { clampSunlight } from './SkyClamp';
 import { TwilightSky } from './TwilightSky';
 import { setHaze, setGroundFog, hazeUniforms } from './Haze';
-import { buildCityMeshes, disposeCityMeshes, type CityMeshes } from './City';
 import {
   Terrain, terrainHeight, setTerrainSeed, getTerrainSeed,
   setWorld as selectWorld, WORLD_PRESETS, type WorldPreset,
 } from './Terrain';
-import { fieldElevation } from './Worlds';
+import { fieldElevation, worldWooded } from './Worlds';
 import { fogCover } from './GroundFog';
 import { QUALITY_PRESETS, DEFAULT_QUALITY, type QualityPreset } from '../render/Quality';
 import { Ocean } from './Ocean';
@@ -21,23 +20,13 @@ import { Shallows } from './Shallows';
 const DEFAULT_WATER = { deep: 0x0a2536, shallow: 0x2f6f74, sand: 0x7e8f7a, glow: undefined };
 import { Clouds, DECK_Y, type DeckStyle } from './Clouds';
 import { Storm } from './Storm';
-import { buildCarrier } from './Carrier';
 import { buildSettlementMeshes, disposeSettlementMeshes } from './Settlements';
 import { buildBoatMeshes, disposeBoatMeshes } from './Boats';
-import { buildStructureMeshes, disposeStructureMeshes, turbineSpin } from './Structures';
-import {
-  buildBalloonMeshes, disposeBalloonMeshes, balloonDrift, balloonsFlyAt,
-} from './Balloons';
-import { buildContrails, contrailLight, contrailTime } from './Contrails';
-import { buildSteam, disposeSteam, steamDrift, steamLight } from './Steam';
-import { buildPyramidMeshes, disposePyramidMeshes } from './Landmarks';
+import { buildStructureMeshes, disposeStructureMeshes } from './Structures';
+import { buildAerodromeMeshes, disposeAerodromeMeshes } from './Aerodromes';
+import { Vegetation } from './Vegetation';
 import { clamp, lerp, smoothstep } from '../util/math';
 import type { Engine } from '../core/Engine';
-
-const RUNWAY_LENGTH = 3000;
-const RUNWAY_WIDTH = 46;
-/** Height of the runway surface above the airfield plateau. */
-const DECK_TOP = 0.03;
 
 /**
  * Sun elevation in degrees for the selectable times of day.
@@ -238,26 +227,6 @@ const GROUND_AMBIENT = new THREE.Color(0x4a4436);
  * replacing it — otherwise picking a season would flatten every world back to
  * the same green hills. It shifts hue and, most visibly, moves the snow line.
  */
-/**
- * Whether a world has forests, from the colour of its own ground.
- *
- * Rather than a flag on all fifteen presets: a landscape whose ground is
- * genuinely green has trees, and one whose ground is red rock, sand or ice does
- * not. Measured across the presets this sorts them exactly right — woodland in
- * the Isles, Fjords, Iceland, Karst, Alpine, Lagoon, Pacific, the island city,
- * the harbour and the domes; none in the Canyon, the Himalaya, the Dunes, the
- * Antarctic or the Gulf.
- *
- * Deliberately given the *unshifted* palette. The seasonal tint moves this
- * enough to flip the answer — an autumn Isles reads as barely green at all —
- * and forests that came and went with the season would be a bug, not a feature.
- */
-function woodedness(grass: readonly [number, number, number]): number {
-  const green = grass[1] - Math.max(grass[0], grass[2]);
-  const t = clamp((green - 0.02) / 0.08, 0, 1);
-  return t * t * (3 - 2 * t);
-}
-
 export const SEASON_PRESETS = [
   { name: 'SPRING', snowScale: 0.92, tint: [0.12, 0.34, 0.08], tintAmount: 0.2 },
   { name: 'SUMMER', snowScale: 1.0, tint: [0, 0, 0], tintAmount: 0 },
@@ -286,12 +255,12 @@ export class World {
    */
   private readonly shallows = new Shallows((x, z) => terrainHeight(x, z));
   readonly clouds = new Clouds();
+  /** Trees, streamed round the aircraft. */
+  readonly vegetation = new Vegetation();
   private readonly storm = new Storm();
 
   private readonly sky: Sky;
   private readonly twilight = new TwilightSky();
-  /** Built only for the world that has one; nothing else pays for it. */
-  private city: CityMeshes | null = null;
   private readonly skyScene = new THREE.Scene();
   private readonly ambient: THREE.HemisphereLight;
   private readonly fog: THREE.FogExp2;
@@ -319,15 +288,10 @@ export class World {
   private readonly _fogTint = new THREE.Color();
   private seasonIndex = 1;
   private worldIndex = 0;
-  private airfield!: THREE.Group;
-  private carrier!: THREE.Group;
+  private aerodromes!: THREE.Group;
   private settlements!: THREE.Group;
   private shipping!: THREE.Group;
-  private landmarks!: THREE.Group;
   private structures!: THREE.Group;
-  private balloons!: THREE.Group;
-  private steam!: THREE.Group;
-  private contrails!: THREE.Group;
   private quality: QualityPreset = QUALITY_PRESETS[DEFAULT_QUALITY];
   private readonly _shadowFocus = new THREE.Vector3();
 
@@ -382,28 +346,19 @@ export class World {
     scene.add(this.ocean.mesh);
     scene.add(this.clouds.mesh);
     scene.add(this.clouds.deck);
-    this.airfield = this.buildAirfield();
-    scene.add(this.airfield);
-    this.carrier = buildCarrier();
-    scene.add(this.carrier);
-    this.settlements = buildSettlementMeshes(WORLD_PRESETS[this.worldIndex].style.dry);
+    const preset = WORLD_PRESETS[this.worldIndex];
+    this.aerodromes = buildAerodromeMeshes();
+    scene.add(this.aerodromes);
+    this.settlements = buildSettlementMeshes(preset.style.dry, { flatRoofs: preset.flatRoofs });
     scene.add(this.settlements);
     this.shipping = buildBoatMeshes();
     scene.add(this.shipping);
     this.structures = buildStructureMeshes();
     scene.add(this.structures);
-    this.landmarks = buildPyramidMeshes(WORLD_PRESETS[this.worldIndex].style.dry);
-    scene.add(this.landmarks);
-    this.balloons = buildBalloonMeshes();
-    scene.add(this.balloons);
-    this.steam = buildSteam();
-    scene.add(this.steam);
-    // Built once and never rebuilt: the traffic overhead is the same traffic
-    // whatever landscape is underneath it.
-    this.contrails = buildContrails();
-    scene.add(this.contrails);
+    scene.add(this.vegetation.group);
+    this.vegetation.regenerate();
 
-    this.carrier.visible = false;
+    this.ocean.mesh.visible = preset.hasOcean;
     this.applyStyle();
     this.applyAtmosphere();
   }
@@ -472,9 +427,6 @@ export class World {
   setWorld(index: number): WorldPreset {
     this.worldIndex = clamp(Math.round(index), 0, WORLD_PRESETS.length - 1);
     const preset = selectWorld(this.worldIndex);
-    this.airfield.position.y = preset.fieldElevation;
-    this.airfield.visible = preset.hasAirfield !== false;
-    this.carrier.visible = preset.hasCarrier === true;
     this.ocean.mesh.visible = preset.hasOcean;
     this.applyStyle();
     this.terrain.regenerate();
@@ -489,11 +441,12 @@ export class World {
    * landscape that no longer exists.
    */
   private refreshSettlements(): void {
-    const tone = WORLD_PRESETS[this.worldIndex].style.dry;
+    const preset = WORLD_PRESETS[this.worldIndex];
+    const tone = preset.style.dry;
 
     this.engine.scene.remove(this.settlements);
     disposeSettlementMeshes(this.settlements);
-    this.settlements = buildSettlementMeshes(tone);
+    this.settlements = buildSettlementMeshes(tone, { flatRoofs: preset.flatRoofs });
     this.engine.scene.add(this.settlements);
 
     // The fleet is replanned by the same call that replans the villages, so it
@@ -508,34 +461,12 @@ export class World {
     this.structures = buildStructureMeshes();
     this.engine.scene.add(this.structures);
 
-    this.engine.scene.remove(this.landmarks);
-    disposePyramidMeshes(this.landmarks);
-    this.landmarks = buildPyramidMeshes(tone);
-    this.engine.scene.add(this.landmarks);
+    this.engine.scene.remove(this.aerodromes);
+    disposeAerodromeMeshes(this.aerodromes);
+    this.aerodromes = buildAerodromeMeshes();
+    this.engine.scene.add(this.aerodromes);
 
-    this.engine.scene.remove(this.balloons);
-    disposeBalloonMeshes(this.balloons);
-    this.balloons = buildBalloonMeshes();
-    this.engine.scene.add(this.balloons);
-
-    // After the landmarks, because the plumes are placed from where the
-    // cooling towers ended up.
-    this.engine.scene.remove(this.steam);
-    disposeSteam(this.steam);
-    this.steam = buildSteam();
-    this.engine.scene.add(this.steam);
-
-    // Tens of thousands of towers are worth building once and only where they
-    // belong — every other world would carry the cost for nothing.
-    if (this.city !== null) {
-      this.engine.scene.remove(this.city.group);
-      disposeCityMeshes(this.city);
-      this.city = null;
-    }
-    if (WORLD_PRESETS[this.worldIndex].city !== undefined) {
-      this.city = buildCityMeshes();
-      this.engine.scene.add(this.city.group);
-    }
+    this.vegetation.regenerate();
   }
 
   get worldIndexValue(): number {
@@ -558,14 +489,29 @@ export class World {
     // The sea is the ocean's business, not the ground's.
     const water = world.style.water ?? DEFAULT_WATER;
     this.ocean.setWaterStyle(water.deep, water.shallow, water.sand, water.glow);
+    const grass = shift(world.style.grass);
+    // The canopy seen from above: dark, pulled toward the world's own green,
+    // turning with the season the way the 3D trees do.
+    const base = world.style.grass;
+    let timber: [number, number, number] = [
+      lerp(base[0] * 0.52, 0.050, 0.62), lerp(base[1] * 0.52, 0.094, 0.62), lerp(base[2] * 0.52, 0.054, 0.62),
+    ];
+    const toward = (c: [number, number, number], t: number): [number, number, number] =>
+      [lerp(timber[0], c[0], t), lerp(timber[1], c[1], t), lerp(timber[2], c[2], t)];
+    if (season.name === 'SPRING') timber = toward([0.07, 0.13, 0.05], 0.4);
+    if (season.name === 'AUTUMN') timber = toward([0.15, 0.085, 0.032], 0.62);
+    if (season.name === 'WINTER') timber = toward([0.085, 0.075, 0.066], 0.8);
+    const beach = world.style.beach ?? (world.hasOcean ? 10 : -1000);
     this.terrain.setStyle({
-      grass: shift(world.style.grass),
+      grass,
       dry: shift(world.style.dry),
       rock: world.style.rock,  // bare rock doesn't change with the season
       snowLine: world.style.snowLine * season.snowScale,
       treeLine: world.style.treeLine,
       strata: world.style.strata,
-    }, woodedness(world.style.grass));
+    }, { beach, timber, farm: world.farmland ?? 0.8 });
+    this.vegetation.setSeason(this.seasonIndex);
+    void worldWooded;
   }
 
   /**
@@ -661,17 +607,6 @@ export class World {
     // horizon it only smears warm haze across a sky that should be going blue.
     u.mieCoefficient.value = lerp(0.005, 0.0016, twilight);
 
-    // Steam and contrails are lit, not luminous, so they go out with the light.
-    //
-    // Both are drawn with an unlit material — they have no business being
-    // shaded, and a plume is scattering rather than reflecting — which means
-    // nothing else would ever dim them: left alone, a white column and seven
-    // white lines burn just as brightly at midnight as at noon, which is the
-    // one thing that would make them obviously fake.
-    const lit = clamp(smoothstep(-6, 6, preset.elevation), 0.06, 1);
-    contrailLight.value = lit * 0.5;
-    steamLight.value = 0.24 + lit * 0.76;
-
     // Low sun: dimmer, redder, and a warmer haze — the same reddening that makes
     // sunsets red, approximated rather than integrated.
     const high = smoothstep(0, 35, preset.elevation);
@@ -707,12 +642,6 @@ export class World {
 
     // Stars only survive a clear sky, and only once the sun is under.
     this.twilight.setVisibility(twilight, w.cloud);
-
-    // The windows come on as the sun goes down, not at a switch: they are
-    // already showing before it is properly dark, which is exactly when a city
-    // looks best. Overcast brings them on earlier, as it does in life.
-    const dusk = 1 - smoothstep(-2, 14, preset.elevation);
-    this.city?.setNight(clamp(Math.max(dusk, twilight) * (0.55 + 0.45 * (1 - w.sun)), 0, 1));
 
     this.clouds.setStyle(w.cloud, w.cloudScale, w.cloudDark, this.deckStyle(w));
     // Haze that knows how high it reaches. An inversion is not "more fog" —
@@ -757,84 +686,6 @@ export class World {
     this.engine.scene.add(this.sky);
   }
 
-  private buildAirfield(): THREE.Group {
-    const group = new THREE.Group();
-    group.position.y = WORLD_PRESETS[this.worldIndex].fieldElevation;
-
-    const asphalt = new THREE.MeshStandardMaterial({ color: 0x2e3136, roughness: 0.92 });
-    const paint = new THREE.MeshStandardMaterial({ color: 0xd8dde2, roughness: 0.8 });
-
-    const runway = new THREE.Mesh(new THREE.BoxGeometry(RUNWAY_WIDTH, 0.4, RUNWAY_LENGTH), asphalt);
-    runway.position.y = DECK_TOP - 0.2;
-    runway.receiveShadow = true;
-    group.add(runway);
-
-    const dash = new THREE.BoxGeometry(1.0, 0.05, 30);
-    for (let z = -RUNWAY_LENGTH / 2 + 40; z < RUNWAY_LENGTH / 2 - 40; z += 60) {
-      const m = new THREE.Mesh(dash, paint);
-      m.position.set(0, DECK_TOP + 0.02, z);
-      group.add(m);
-    }
-
-    const bar = new THREE.BoxGeometry(2.2, 0.05, 26);
-    for (const end of [-1, 1]) {
-      for (let i = -3; i <= 3; i++) {
-        if (i === 0) continue;
-        const m = new THREE.Mesh(bar, paint);
-        m.position.set(i * 4.2, DECK_TOP + 0.02, end * (RUNWAY_LENGTH / 2 - 30));
-        group.add(m);
-      }
-    }
-
-    const lightGeo = new THREE.SphereGeometry(0.5, 6, 4);
-    const lightMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
-    for (let z = -RUNWAY_LENGTH / 2; z <= RUNWAY_LENGTH / 2; z += 100) {
-      for (const side of [-1, 1]) {
-        const m = new THREE.Mesh(lightGeo, lightMat);
-        m.position.set(side * (RUNWAY_WIDTH / 2 + 3), DECK_TOP + 0.4, z);
-        group.add(m);
-      }
-    }
-
-    const concrete = new THREE.MeshStandardMaterial({ color: 0x8a8f94, roughness: 0.85 });
-    const roof = new THREE.MeshStandardMaterial({ color: 0x5a6068, roughness: 0.7, metalness: 0.3 });
-
-    for (let i = 0; i < 4; i++) {
-      const hangar = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.BoxGeometry(56, 14, 40), concrete);
-      body.position.y = 7;
-      body.castShadow = true;
-      body.receiveShadow = true;
-      hangar.add(body);
-
-      const vault = new THREE.Mesh(
-        new THREE.CylinderGeometry(28, 28, 40, 16, 1, false, 0, Math.PI),
-        roof,
-      );
-      vault.rotation.z = Math.PI / 2;
-      vault.rotation.y = Math.PI / 2;
-      vault.position.y = 14;
-      vault.scale.set(1, 1, 0.36);
-      vault.castShadow = true;
-      hangar.add(vault);
-
-      hangar.position.set(-190, 0, -400 + i * 110);
-      group.add(hangar);
-    }
-
-    const tower = new THREE.Mesh(new THREE.CylinderGeometry(7, 9, 34, 12), concrete);
-    tower.position.set(-150, 17, 180);
-    tower.castShadow = true;
-    group.add(tower);
-
-    const cab = new THREE.Mesh(new THREE.CylinderGeometry(11, 9, 8, 12), roof);
-    cab.position.set(-150, 38, 180);
-    cab.castShadow = true;
-    group.add(cab);
-
-    return group;
-  }
-
   /** Build every chunk needed for the opening view before the first frame. */
   prime(focus: THREE.Vector3): void {
     this.terrain.update(focus, Infinity);
@@ -844,6 +695,7 @@ export class World {
     // of a flight.
     for (let i = 0; i < 64 && !this.shallows.complete; i++) this.shallows.update(focus);
     this.ocean.setShallows(this.shallows);
+    this.vegetation.prime(focus);
   }
 
   applyQuality(preset: QualityPreset): void {
@@ -891,15 +743,8 @@ export class World {
       this.engine.postFX.setFogWash(0, this._fogTint);
     }
 
-    // The rotors. One number for every turbine in the world.
-    turbineSpin.value += dt;
-    // The same bargain twice over: the whole flock drifts and every plume
-    // billows off one uniform apiece.
-    balloonDrift.value += dt;
-    steamDrift.value += dt;
-    contrailTime.value += dt;
-    this.balloons.visible = balloonsFlyAt(this.clock);
     this.terrain.update(focus);
+    this.vegetation.update(focus, dt);
     this.shallows.update(focus);
     this.ocean.setShallows(this.shallows);
     this.ocean.update(dt);
@@ -909,9 +754,6 @@ export class World {
 
     this.clouds.update(this.engine.camera, dt);
     this.twilight.follow(focus);
-    // The city streams itself in and out around the aircraft, like the terrain
-    // chunks: towns exist everywhere, and are planned as they come into range.
-    this.city?.update(this.engine.camera, this.quality.shadowRange, focus);
 
     const weather = WEATHER_PRESETS[this.weatherIndex];
     this.storm.update(dt, weather.storm);

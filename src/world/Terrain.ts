@@ -83,6 +83,8 @@ export class Terrain {
     uBeach: { value: 16 },
     /** Canopy colour for the season: green in summer, rust in autumn, bare twigs in winter. */
     uTimber: { value: new THREE.Vector3(0.05, 0.09, 0.05) },
+    /** How much of the open country is laid out in fields, 0..1. */
+    uFarm: { value: 0.8 },
   };
 
   private readonly cache = new Map<string, THREE.Mesh>();
@@ -109,7 +111,7 @@ export class Terrain {
     for (const mesh of this.cache.values()) mesh.castShadow = on;
   }
 
-  setStyle(style: TerrainStyle, extra: { beach: number; timber: [number, number, number] }): void {
+  setStyle(style: TerrainStyle, extra: { beach: number; timber: [number, number, number]; farm: number }): void {
     this.styleUniforms.uGrass.value.set(...style.grass);
     this.styleUniforms.uDry.value.set(...style.dry);
     this.styleUniforms.uRock.value.set(...style.rock);
@@ -118,6 +120,7 @@ export class Terrain {
     this.styleUniforms.uStrata.value = style.strata;
     this.styleUniforms.uBeach.value = extra.beach;
     this.styleUniforms.uTimber.value.set(...extra.timber);
+    this.styleUniforms.uFarm.value = extra.farm;
   }
 
   /**
@@ -628,6 +631,7 @@ function createTerrainMaterial(
          uniform float uStrata;
          uniform float uBeach;
          uniform vec3 uTimber;
+         uniform float uFarm;
 
          float tHash(vec2 p) {
            p = fract(p * vec2(123.34, 456.21));
@@ -701,6 +705,41 @@ function createTerrainMaterial(
              col = mix(col, col * vec3(1.22, 0.80, 0.62), uStrata * band * 0.5);
            }
 
+           // The countryside's own patchwork: every lowland front was farmed
+           // hedge to hedge. Fields on a grid turned per 2.6 km district, with
+           // an exact integer hash so the tree scatter can find the hedges.
+           float farmCover = 0.0;
+           if (uFarm > 0.001) {
+             ivec2 rg = ivec2(floor(wp / 2600.0));
+             float ang = bfHash(rg, 901u) * 3.14159;
+             float ca = cos(ang);
+             float sa = sin(ang);
+             vec2 lp = vec2(ca * wp.x + sa * wp.y, -sa * wp.x + ca * wp.y);
+             lp += vec2(sin(lp.y * 0.0041), sin(lp.x * 0.0033)) * 22.0;
+             vec2 size = vec2(150.0, 230.0) * (0.75 + 0.6 * bfHash(rg, 902u));
+             vec2 gcell = floor(lp / size);
+             vec2 within = fract(lp / size);
+             ivec2 fc = ivec2(gcell) + rg * 977;
+             float pick = bfHash(fc, 903u);
+             vec3 tone = pick < 0.26 ? mix(uDry, uGrass, 0.3) * 1.08
+                       : pick < 0.58 ? uGrass * 1.05
+                       : pick < 0.78 ? mix(uGrass, uDry, 0.38)
+                       : pick < 0.9 ? uDry * 0.66 + vec3(0.012, 0.004, 0.0)
+                       : uGrass * 0.84;
+             tone *= 0.88 + 0.22 * bfHash(fc, 904u);
+             // Furrows, up close: the direction of ploughing per field.
+             float furrowVis = 1.0 - smoothstep(0.3, 1.2, fw);
+             float fdir = bfHash(fc, 905u) < 0.5 ? lp.x : lp.y;
+             tone *= mix(1.0, 0.92 + 0.08 * sin(fdir * 2.4), furrowVis * step(0.78, pick) * step(pick, 0.9));
+             vec2 bd = (0.5 - abs(within - 0.5)) * size;
+             float edge = bfLine(min(bd.x, bd.y), 1.6, fw);
+             tone = mix(tone, uGrass * 0.55, edge * 0.55);
+             farmCover = uFarm * (1.0 - smoothstep(0.07, 0.18, slope))
+                       * smoothstep(0.30, 0.46, broad + mottle * 0.25)
+                       * (1.0 - snowLine);
+             col = mix(col, tone, farmCover * 0.68);
+           }
+
            // The ordinary village's belt of soft plots.
            if (vSettled.w > 0.001) {
              float plots = smoothstep(0.45, 0.55, tFbm(wp * 0.011));
@@ -741,7 +780,8 @@ function createTerrainMaterial(
            // the lines they are not woods any more.
            {
              float canopy = smoothstep(0.10, 0.48, vForest + (fine - 0.5) * 0.3);
-             float clump = 0.74 + 0.44 * fine + 0.24 * mottle;
+             float crowns = mix(0.5, tNoise(wp * 0.22), 1.0 - smoothstep(0.8, 3.0, fw));
+             float clump = (0.78 + 0.4 * fine + 0.2 * mottle) * (0.8 + 0.45 * crowns);
              col = mix(col, uTimber * clump, canopy * (1.0 - shatter) * 0.94);
            }
 
@@ -760,7 +800,7 @@ function createTerrainMaterial(
              float fade = smoothstep(-10.0, 240.0, bfU);
              float cov = bfLine(abs(vRoad.x), rw, fw) * fade;
              float verge = max(0.0, bfLine(abs(vRoad.x), rw + 2.6, fw) * fade - cov);
-             vec3 roadCol = mix(uDry * 1.2 + 0.035, vec3(0.50, 0.48, 0.43), 0.45);
+             vec3 roadCol = mix(uDry * 1.05 + 0.02, vec3(0.40, 0.385, 0.35), 0.45);
              roadCol = mix(roadCol, uGrass * 1.1, sandy * 0.5);
              col = mix(col, col * 0.78, verge * 0.6);
              col = mix(col, roadCol * (0.9 + 0.16 * fine), cov);
@@ -815,10 +855,10 @@ function createTerrainMaterial(
              // Behind that, the fields gone to rank grass and thistle.
              float blight = 1.0 - smoothstep(250.0, 1900.0, u + (mottle - 0.5) * 600.0);
 
-             vec3 soil = mix(vec3(0.15, 0.125, 0.095), uDry * 0.62, 0.3 + 0.6 * sandy);
-             vec3 dark = soil * vec3(0.5, 0.5, 0.54);
-             vec3 chalkC = vec3(0.62, 0.61, 0.56);
-             vec3 spoil = mix(soil * 1.6, chalkC, chalk);
+             vec3 soil = mix(vec3(0.13, 0.094, 0.06), uDry * 0.6, 0.25 + 0.65 * sandy);
+             vec3 dark = soil * vec3(0.56, 0.5, 0.44);
+             vec3 chalkC = vec3(0.54, 0.515, 0.455);
+             vec3 spoil = mix(soil * 1.4, chalkC, chalk * 0.9);
              spoil = mix(spoil, uGrass * 1.08, sandy);
              dark = mix(dark, uGrass * 0.62, sandy * 0.6);
 
@@ -847,90 +887,26 @@ function createTerrainMaterial(
                col = mix(col, vec3(0.045, 0.04, 0.035), stump * woodF);
              }
 
-             // ---- trenches: fire, support and reserve lines, the
-             // communication trenches zig-zagging back, and saps out into
-             // no-man's-land.
-             vec3 q = bfSide > 0.0 ? uWobHome : uWobFar;
-             float sP = s + q.x * 37.0;
-             float uf = u - ${f1(C.FIRE_BACK)};
-             float dFire = bfCrenel(sP, uf, 25.0, 3.4, 0.64);
-             float us = u - (165.0 + 28.0 * sin(s * 0.0023 + q.y) + 12.0 * sin(s * 0.0071 + q.z));
-             float dSup = bfCrenel(sP * 1.13 + 11.0, us, 21.0, 2.6, 0.6);
-             float ur = u - (540.0 + 70.0 * sin(s * 0.0014 + q.z) + 25.0 * sin(s * 0.0053 + q.x));
-             float dRes = bfCrenel(sP * 0.9 + 5.0, ur, 34.0, 4.0, 0.5);
-
-             float dComm = 1e5;
-             float ci = floor(s / 260.0);
-             for (int k = -1; k <= 1; k++) {
-               float cc = ci + float(k);
-               ivec2 ic = ivec2(int(cc), bfSide > 0.0 ? 1 : 2);
-               if (bfHash(ic, uint(707.0 + uFrontSalt)) > 0.82) continue;
-               float s0 = (cc + 0.2 + 0.6 * bfHash(ic, uint(708.0 + uFrontSalt))) * 260.0;
-               float uEnd = 380.0 + 1100.0 * bfHash(ic, uint(709.0 + uFrontSalt));
-               if (u < -2.0 || u > uEnd) continue;
-               float bend = 24.0 * sin(u * 0.0045 + cc * 1.7) + 10.0 * sin(u * 0.013 + cc);
-               dComm = min(dComm, bfZigzag(s - s0 - bend, u, 30.0, 6.0));
-             }
-
-             float dSap = 1e5;
-             float dPost = 1e5;
-             {
-               float cs = floor(s / 150.0);
-               ivec2 ic = ivec2(int(cs), bfSide > 0.0 ? 3 : 4);
-               if (bfHash(ic, uint(711.0 + uFrontSalt)) < 0.6) {
-                 float s0 = (cs + 0.3 + 0.4 * bfHash(ic, uint(712.0 + uFrontSalt))) * 150.0;
-                 float len = 18.0 + 30.0 * bfHash(ic, uint(713.0 + uFrontSalt));
-                 dSap = length(vec2(s - s0, uf - clamp(uf, -len, 0.0)));
-                 dPost = length(vec2(s - s0, uf + len));
-               }
-             }
-
-             float tv = (1.0 - steep) * (1.0 - smoothstep(1500.0, 1700.0, u)) * smoothstep(0.5, 2.5, h);
-             if (tv > 0.001) {
-               vec3 cut = mix(vec3(0.028, 0.024, 0.02), dark * 0.4, 0.3);
-               vec3 spoilT = spoil * (0.94 + 0.12 * c2);
-               float spoilW = 2.6 + 1.6 * chalk;
-               float sp = max(max(bfLine(dSup, 1.0 + spoilW * 0.85, fw), bfLine(dRes, 0.9 + spoilW * 0.7, fw)),
-                              max(bfLine(dComm, 0.8 + spoilW * 0.6, fw), bfLine(dFire, 1.15 + spoilW, fw)));
-               sp = max(sp, max(bfLine(dSap, 0.7 + spoilW * 0.5, fw), bfLine(dPost, 2.4 + spoilW * 0.6, fw)));
-               float ct = max(max(bfLine(dSup, 1.0, fw), bfLine(dRes, 0.9, fw)),
-                              max(bfLine(dComm, 0.75, fw), bfLine(dFire, 1.15, fw)));
-               ct = max(ct, max(bfLine(dSap, 0.65, fw), bfLine(dPost, 1.8, fw)));
-               col = mix(col, spoilT, sp * tv * 0.9);
-               col = mix(col, cut, ct * tv);
-               bfWater = max(bfWater, ct * tv * smoothstep(0.4, 0.9, flooded) * 0.85);
-             }
-
-             // ---- wire: two belts in front of the fire trench, a grey-brown
-             // hatch of pickets and coils.
-             float beltA = 1.0 - smoothstep(8.0, 11.0, abs(u + 24.0 + 5.0 * sin(s * 0.013 + q.x)));
-             float beltB = 1.0 - smoothstep(4.0, 6.5, abs(u + 58.0 + 6.0 * sin(s * 0.009 + q.y)));
-             float belt = max(beltA, beltB * 0.8) * (1.0 - steep) * smoothstep(0.5, 2.5, h);
-             if (belt > 0.001) {
-               float hA = bfLine(abs(fract((s + u) / 2.3) - 0.5) * 2.3, 0.13, fw);
-               float hB = bfLine(abs(fract((s - u) / 2.9) - 0.5) * 2.9, 0.13, fw);
-               float pick = bfLine(length(fract(wp / 3.0) - 0.5) * 3.0, 0.22, fw);
-               vec3 wireCol = vec3(0.13, 0.115, 0.10);
-               col = mix(col, wireCol, belt * clamp(0.2 + 0.75 * max(max(hA, hB), pick), 0.0, 1.0));
-             }
-
              // ---- shell holes: heavy, field-gun and small, densest on the
              // line and thinning out to the odd hole in a far field.
-             float dens = bfDensity(u) * craters;
-             vec3 avgHole = mix(dark, spoil, 0.35);
+             // Shelling is not even: barrages walk, some ground is hit again and
+             // again and some survives. A slow noise lumps the density.
+             float dens = bfDensity(u) * craters * mix(0.55, 1.0, bfLump(wp));
+             vec3 avgHole = mix(dark, spoil, 0.3);
              float farFade = smoothstep(3.0, 14.0, fw);
              col = mix(col, avgHole, dens * 0.3 * farFade);
              if (dens > 0.004 && farFade < 0.999) {
                float bestR = 9.0;
                float bestWet = 0.0;
                float bestSize = 0.0;
-               bfCraters(wp, ${f1(C.C1)}, ${f1(C.SALT_C1)}, 0.9, 0.2, 0.25, dens, flooded, fw,
+               float wetShare = flooded * 0.45;
+               bfCraters(wp, ${f1(C.C1)}, ${f1(C.SALT_C1)}, 0.9, 0.2, 0.25, dens, wetShare, fw,
                          bestR, bestWet, bestSize, bfGrad);
-               bfCraters(wp, ${f1(C.C2)}, ${f1(C.SALT_C2)}, 1.0, 0.18, 0.26, dens, flooded, fw,
+               bfCraters(wp, ${f1(C.C2)}, ${f1(C.SALT_C2)}, 0.62, 0.18, 0.26, dens, wetShare, fw,
                          bestR, bestWet, bestSize, bfGrad);
                if (fw < 1.0 && u < 700.0) {
-                 bfCraters(wp, 5.5, 404.0, 1.0, 0.16, 0.26, dens * (1.0 - smoothstep(0.0, 700.0, u)),
-                           flooded * 0.5, fw, bestR, bestWet, bestSize, bfGrad);
+                 bfCraters(wp, 5.5, 404.0, 0.55, 0.16, 0.26, dens * (1.0 - smoothstep(0.0, 700.0, u)),
+                           wetShare * 0.4, fw, bestR, bestWet, bestSize, bfGrad);
                }
                if (bestR < 1.7) {
                  float vis = (1.0 - smoothstep(bestSize * 0.3, bestSize * 1.1, fw)) * (1.0 - steep * 0.7);
@@ -939,8 +915,8 @@ function createTerrainMaterial(
                  float ejecta = smoothstep(1.0, 1.18, bestR) * (1.0 - smoothstep(1.25, 1.7, bestR));
                  vec3 bowlCol = mix(dark * 0.75, soil * 0.95, bestR * bestR);
                  vec3 cc = col;
-                 cc = mix(cc, spoil, ejecta * (0.3 + 0.35 * chalk) * smoothstep(0.35, 0.75, c2 + 0.25));
-                 cc = mix(cc, spoil * 1.04, rim * 0.8);
+                 cc = mix(cc, spoil, ejecta * (0.22 + 0.4 * chalk) * smoothstep(0.35, 0.75, c2 + 0.25));
+                 cc = mix(cc, mix(spoil, soil, 0.3), rim * (0.4 + 0.3 * chalk) * (0.6 + 0.6 * c2));
                  cc = mix(cc, bowlCol, bowl);
                  float pool = bestWet * (1.0 - smoothstep(0.5, 0.6, bestR));
                  cc = mix(cc, dark * 0.55, bestWet * (1.0 - smoothstep(0.58, 0.74, bestR)) * 0.8);
@@ -973,11 +949,78 @@ function createTerrainMaterial(
                  }
                }
              }
+             // ---- trenches: fire, support and reserve lines, the
+             // communication trenches zig-zagging back, and saps out into
+             // no-man's-land.
+             vec3 q = bfSide > 0.0 ? uWobHome : uWobFar;
+             float sP = s + q.x * 37.0;
+             float uf = u - ${f1(C.FIRE_BACK)};
+             float dFire = bfCrenel(sP, uf, 25.0, 3.4, 0.64);
+             float us = u - (165.0 + 28.0 * sin(s * 0.0023 + q.y) + 12.0 * sin(s * 0.0071 + q.z));
+             float dSup = bfCrenel(sP * 1.13 + 11.0, us, 21.0, 2.6, 0.6);
+             float ur = u - (540.0 + 70.0 * sin(s * 0.0014 + q.z) + 25.0 * sin(s * 0.0053 + q.x));
+             float dRes = bfCrenel(sP * 0.9 + 5.0, ur, 34.0, 4.0, 0.5);
+
+             float dComm = 1e5;
+             float ci = floor(s / 260.0);
+             for (int k = -1; k <= 1; k++) {
+               float cc = ci + float(k);
+               ivec2 ic = ivec2(int(cc), bfSide > 0.0 ? 1 : 2);
+               if (bfHash(ic, uint(707.0 + uFrontSalt)) > 0.6) continue;
+               float s0 = (cc + 0.15 + 0.7 * bfHash(ic, uint(708.0 + uFrontSalt))) * 260.0;
+               float uEnd = 220.0 + 1100.0 * pow(bfHash(ic, uint(709.0 + uFrontSalt)), 1.6);
+               if (u < -2.0 || u > uEnd) continue;
+               float bend = 55.0 * sin(u * 0.0031 + cc * 1.7) + 14.0 * sin(u * 0.011 + cc);
+               dComm = min(dComm, bfZigzag(s - s0 - bend, u, 30.0, 6.0));
+             }
+
+             float dSap = 1e5;
+             float dPost = 1e5;
+             {
+               float cs = floor(s / 150.0);
+               ivec2 ic = ivec2(int(cs), bfSide > 0.0 ? 3 : 4);
+               if (bfHash(ic, uint(711.0 + uFrontSalt)) < 0.6) {
+                 float s0 = (cs + 0.3 + 0.4 * bfHash(ic, uint(712.0 + uFrontSalt))) * 150.0;
+                 float len = 18.0 + 30.0 * bfHash(ic, uint(713.0 + uFrontSalt));
+                 dSap = length(vec2(s - s0, uf - clamp(uf, -len, 0.0)));
+                 dPost = length(vec2(s - s0, uf + len));
+               }
+             }
+
+             float tv = (1.0 - steep) * (1.0 - smoothstep(1500.0, 1700.0, u)) * smoothstep(0.5, 2.5, h);
+             if (tv > 0.001) {
+               vec3 cut = mix(vec3(0.028, 0.024, 0.02), dark * 0.4, 0.3);
+               vec3 spoilT = mix(spoil, soil, 0.35 * c1) * (0.92 + 0.12 * c2);
+               float spoilW = 3.2 + 1.8 * chalk;
+               float sp = max(max(bfLine(dSup, 1.0 + spoilW * 0.85, fw), bfLine(dRes, 0.9 + spoilW * 0.7, fw)),
+                              max(bfLine(dComm, 0.8 + spoilW * 0.6, fw), bfLine(dFire, 1.15 + spoilW, fw)));
+               sp = max(sp, max(bfLine(dSap, 0.7 + spoilW * 0.5, fw), bfLine(dPost, 2.4 + spoilW * 0.6, fw)));
+               float ct = max(max(bfLine(dSup, 1.0, fw), bfLine(dRes, 0.9, fw)),
+                              max(bfLine(dComm, 0.75, fw), bfLine(dFire, 1.15, fw)));
+               ct = max(ct, max(bfLine(dSap, 0.65, fw), bfLine(dPost, 1.8, fw)));
+               col = mix(col, spoilT, sp * tv * (0.7 + 0.25 * smoothstep(0.3, 0.6, c1)));
+               col = mix(col, cut, ct * tv);
+               bfWater = max(bfWater, ct * tv * smoothstep(0.4, 0.9, flooded) * 0.85);
+             }
+
+             // ---- wire: two belts in front of the fire trench, a grey-brown
+             // hatch of pickets and coils.
+             float beltA = 1.0 - smoothstep(8.0, 11.0, abs(u + 24.0 + 5.0 * sin(s * 0.013 + q.x)));
+             float beltB = 1.0 - smoothstep(4.0, 6.5, abs(u + 58.0 + 6.0 * sin(s * 0.009 + q.y)));
+             float belt = max(beltA, beltB * 0.8) * (1.0 - steep) * smoothstep(0.5, 2.5, h);
+             if (belt > 0.001) {
+               float hA = bfLine(abs(fract((s + u) / 2.3) - 0.5) * 2.3, 0.13, fw);
+               float hB = bfLine(abs(fract((s - u) / 2.9) - 0.5) * 2.9, 0.13, fw);
+               float pick = bfLine(length(fract(wp / 3.0) - 0.5) * 3.0, 0.22, fw);
+               vec3 wireCol = vec3(0.13, 0.115, 0.10);
+               col = mix(col, wireCol, belt * clamp(0.2 + 0.75 * max(max(hA, hB), pick), 0.0, 1.0));
+             }
+
            }
 
            // Standing water: shell holes, flooded trenches. Dark, and the
            // roughness chunk polishes it so it takes the sky.
-           col = mix(col, vec3(0.022, 0.03, 0.034), bfWater);
+           col = mix(col, vec3(0.02, 0.026, 0.028), bfWater);
            diffuseColor.rgb *= col;
          }`,
       )
@@ -1014,9 +1057,8 @@ function createTerrainMaterial(
            roughnessFactor = mix(roughnessFactor, 0.55,
              smoothstep(uSnowLine - 380.0, uSnowLine, vTerrainPos.y));
            // Wet mud has a sheen; water takes the sky.
-           roughnessFactor = mix(roughnessFactor, 0.7, bfMud * uFrontCfg.w);
            roughnessFactor = mix(roughnessFactor, 0.09, smoothstep(0.06, 0.5, vRiver));
-           roughnessFactor = mix(roughnessFactor, 0.06, bfWater);
+           roughnessFactor = mix(roughnessFactor, 0.3, bfWater);
          }`,
       );
   };

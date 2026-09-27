@@ -14,7 +14,7 @@
  */
 
 import {
-  Biquad, TAU, addBoom, addMode, addNWave, addNoiseBurst, bi, brownNoise, envAD, fadeIn, fadeOut,
+  Biquad, TAU, addBoom, bankLoop, addMode, addNWave, addNoiseBurst, bi, brownNoise, envAD, fadeIn, fadeOut,
   filtered, filteredLoop, gauss, makeRng, mixInto, normalizePeak, peak, pinkNoise, range, rms,
   saturate, scale, smoothRandom, sweptNoise, whiteNoise, envelope, type Rng,
 } from './dsp';
@@ -134,12 +134,10 @@ export function renderEngineLoop(spec: EngineSpec, sr: number): Float32Array {
   }
 
   const y = new Float32Array(L);
+  const gains = spec.modes.map((m) => m[2]);
   for (let g = 0; g < G; g++) {
     const det = 1 + spec.modeSpread * (g - 1) + spec.modeSpread * 0.3 * gauss(r);
-    for (const [f, q, gain] of spec.modes) {
-      const band = filteredLoop(groups[g], new Biquad('bandpass', sr, f * det, q));
-      mixInto(y, band, 0, gain);
-    }
+    bankLoop(groups[g], spec.modes.map(([f, q]) => new Biquad('bandpass', sr, f * det, q)), gains, y);
   }
   const [bf, bg] = spec.body;
   mixInto(y, filteredLoop(all, new Biquad('lowpass', sr, bf, 0.9), new Biquad('lowpass', sr, bf, 0.6)), 0, bg);
@@ -228,9 +226,9 @@ interface GunSpec {
 }
 
 const GUN_SPECS: Record<GunKind, GunSpec> = {
-  vickers: { len: 0.24, crackW: 0.00034, thump: [150, 72], thumpAmp: 0.8, body: 380, bodyTau: 0.02, mech: [1850, 3100, 4700, 6900], mechT: [0.016, 0.052, 0.088], mechAmp: 0.16 },
-  spandau: { len: 0.24, crackW: 0.00036, thump: [135, 66], thumpAmp: 0.85, body: 330, bodyTau: 0.022, mech: [1600, 2750, 4300, 6100], mechT: [0.018, 0.056, 0.094], mechAmp: 0.15 },
-  lewis: { len: 0.2, crackW: 0.0003, thump: [175, 95], thumpAmp: 0.6, body: 480, bodyTau: 0.014, mech: [2300, 3600, 5500, 7800], mechT: [0.012, 0.04, 0.066], mechAmp: 0.2 },
+  vickers: { len: 0.24, crackW: 0.00034, thump: [210, 105], thumpAmp: 0.6, body: 420, bodyTau: 0.016, mech: [1850, 3100, 4700, 6900], mechT: [0.016, 0.052, 0.088], mechAmp: 0.16 },
+  spandau: { len: 0.24, crackW: 0.00036, thump: [190, 95], thumpAmp: 0.62, body: 370, bodyTau: 0.018, mech: [1600, 2750, 4300, 6100], mechT: [0.018, 0.056, 0.094], mechAmp: 0.15 },
+  lewis: { len: 0.2, crackW: 0.0003, thump: [240, 125], thumpAmp: 0.45, body: 520, bodyTau: 0.012, mech: [2300, 3600, 5500, 7800], mechT: [0.012, 0.04, 0.066], mechAmp: 0.2 },
 };
 
 /**
@@ -247,10 +245,13 @@ function gunShot(kind: GunKind, sr: number, r: Rng): Float32Array {
   const hiss = zeros(s.len, sr);
   addNoiseBurst(hiss, sr, t0, 1, 0.0012, r);
   mixInto(o, filtered(hiss, new Biquad('highpass', sr, 1500, 0.7)), 0, 0.8);
+  // The bark: blast noise through the jacket and cowling — two broad bands.
   const body = zeros(s.len, sr);
-  addNoiseBurst(body, sr, t0, 1, s.bodyTau * range(r, 0.85, 1.15), r, 0.0008);
-  mixInto(o, filtered(body, new Biquad('bandpass', sr, s.body * range(r, 0.9, 1.1), 0.8)), 0, 1.6);
-  addBoom(o, sr, t0, s.thumpAmp * range(r, 0.9, 1.05), s.thump[0], s.thump[1], 0.012, 0.0007, 0.028);
+  addNoiseBurst(body, sr, t0, 1, s.bodyTau * range(r, 0.85, 1.15), r, 0.0006);
+  const bf = s.body * range(r, 0.9, 1.1);
+  mixInto(o, filtered(body, new Biquad('bandpass', sr, bf, 0.7)), 0, 2.4);
+  mixInto(o, filtered(body, new Biquad('bandpass', sr, bf * 2.3, 0.9)), 0, 1.5);
+  addBoom(o, sr, t0, s.thumpAmp * range(r, 0.9, 1.05), s.thump[0], s.thump[1], 0.01, 0.0006, 0.018);
   for (const mt of s.mechT) {
     const t = mt + 0.003 * gauss(r);
     const a = s.mechAmp * range(r, 0.6, 1.1);
@@ -451,7 +452,7 @@ function flak(sr: number, r: Rng): Float32Array {
   const wh = zeros(len, sr);
   addNoiseBurst(wh, sr, 0.001, 1, 0.07, r, 0.002);
   mixInto(o, filtered(wh, new Biquad('bandpass', sr, range(r, 160, 220), 0.8), new Biquad('lowpass', sr, 420, 0.7)), 0, 2.2);
-  addBoom(o, sr, 0.001, 0.8, 70, 44, 0.05, 0.002, 0.09);
+  addBoom(o, sr, 0.001, 0.4, 95, 55, 0.04, 0.002, 0.07);
   const ring = [230, 347, 512, 689].map((f) => f * range(r, 0.94, 1.06));
   for (let i = 0; i < ring.length; i++) addMode(o, sr, 0.002, ring[i], 0.12 - i * 0.015, range(r, 0.25, 0.45), r() * TAU, 0.005);
   const tail = zeros(len, sr);
@@ -493,17 +494,17 @@ function artillery(sr: number, r: Rng): Float32Array {
   const len = 4.5;
   const n = Math.round(len * sr);
   const o = new Float32Array(n);
-  addBoom(o, sr, 0.005, 1, range(r, 60, 75), range(r, 32, 40), 0.15, 0.008, 0.35);
+  addBoom(o, sr, 0.005, 1, range(r, 80, 95), range(r, 42, 50), 0.15, 0.008, 0.35);
   const echoes = 3 + Math.floor(r() * 3);
   for (let i = 0; i < echoes; i++) {
-    addBoom(o, sr, range(r, 0.2, 1.6), range(r, 0.12, 0.35), 55, 34, 0.2, 0.05, 0.4);
+    addBoom(o, sr, range(r, 0.2, 1.6), range(r, 0.12, 0.35), 70, 42, 0.2, 0.05, 0.4);
   }
   const b = brownNoise(n, r);
   const am = smoothRandom(n, sr, 2.2, r);
   const ae = envelope(n, sr, 0, 0.08, 1.2);
   for (let i = 0; i < n; i++) b[i] *= ae[i] * (1 + 0.5 * am[i]);
-  const bl = filtered(b, new Biquad('lowpass', sr, 260, 0.7), new Biquad('lowpass', sr, 260, 0.7));
-  mixInto(o, bl, 0, 0.55 / (peak(bl) || 1));
+  const bl = filtered(b, new Biquad('lowpass', sr, 340, 0.7), new Biquad('lowpass', sr, 340, 0.7));
+  mixInto(o, bl, 0, 0.7 / (peak(bl) || 1));
   saturate(o, 1.7);
   fadeOut(o, Math.round(0.6 * sr));
   return normalizePeak(o, 0.9);
@@ -746,10 +747,10 @@ export const entryRate = (e: BankEntry, sr: number): number => (e.low ? lowRate(
 
 /** Rough render cost order: what the game needs first goes first. */
 export const PREWARM_ORDER: ClipName[] = [
-  'ui.select', 'ui.confirm', 'ui.back', 'noise.white', 'noise.pink', 'noise.brown', 'ir',
-  'eng.rotary.hi', 'eng.rotary.lo', 'eng.inline.hi', 'eng.inline.lo', 'crackle',
-  'gun.vickers', 'gun.spandau', 'gun.lewis', 'hit', 'hit.thud', 'hit.confirm', 'whiz',
-  'exp.crack', 'exp.boom', 'exp.tail', 'exp.debris', 'flak', 'artillery',
+  'ui.select', 'ui.confirm', 'ui.back', 'noise.pink', 'noise.white', 'noise.brown',
+  'eng.rotary.hi', 'eng.rotary.lo', 'eng.inline.hi', 'eng.inline.lo',
+  'gun.vickers', 'gun.spandau', 'gun.lewis', 'crackle', 'hit', 'hit.thud', 'hit.confirm', 'whiz',
+  'ir', 'exp.crack', 'exp.boom', 'exp.tail', 'exp.debris', 'flak', 'artillery',
   'eng.heavy.hi', 'eng.heavy.lo', 'jam', 'clear', 'bomb', 'balloon',
   'ui.objective', 'ui.fail', 'ui.victory',
 ];

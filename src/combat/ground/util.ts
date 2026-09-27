@@ -188,6 +188,14 @@ export class Parts {
     return this;
   }
 
+  /** Push an already-attributed geometry (e.g. another Parts' merge) as-is. */
+  addRaw(g: THREE.BufferGeometry, m: THREE.Matrix4 | null = null): this {
+    const c = g.clone();
+    if (m) c.applyMatrix4(m);
+    this.list.push(c);
+    return this;
+  }
+
   /* ------------------------------------------------------------ shorthands */
 
   box(w: number, h: number, d: number, m: THREE.Matrix4 | null, o: PartOpts): this {
@@ -344,5 +352,24 @@ export function displace(g: THREE.BufferGeometry, f: (p: Vec3) => void): THREE.B
     pos.setXYZ(i, p.x, p.y, p.z);
   }
   g.computeVertexNormals();
+  return g;
+}
+
+/** Body-space centre + radius used for bullet hits. */
+export interface HitSphere { o: THREE.Vector3; r: number; }
+
+/** Drop triangles whose centroid fails `keep` (burnt-through holes, torn edges). */
+export function ragged(g: THREE.BufferGeometry, keep: (x: number, y: number, z: number) => boolean): THREE.BufferGeometry {
+  const pos = g.getAttribute('position') as THREE.BufferAttribute;
+  const idx = g.index!;
+  const out: number[] = [];
+  for (let i = 0; i < idx.count; i += 3) {
+    const a = idx.getX(i), b = idx.getX(i + 1), c = idx.getX(i + 2);
+    const x = (pos.getX(a) + pos.getX(b) + pos.getX(c)) / 3;
+    const y = (pos.getY(a) + pos.getY(b) + pos.getY(c)) / 3;
+    const z = (pos.getZ(a) + pos.getZ(b) + pos.getZ(c)) / 3;
+    if (keep(x, y, z)) out.push(a, b, c);
+  }
+  g.setIndex(out);
   return g;
 }

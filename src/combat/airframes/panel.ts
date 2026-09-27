@@ -262,6 +262,16 @@ export function buildPanel(sp: PanelSpec): PanelOut {
   return { main, ctrl: ctrl.count ? ctrl : null, hingeA, hingeB };
 }
 
+/** Panel-frame point on the upper (or lower) surface at span s, chordwise x — for strut and wire attachments. */
+export function surfacePoint(sp: PanelSpec, s: number, x: number, upper: boolean): V3 {
+  const le = sp.le(s), te = sp.te(s);
+  const c = Math.max(te - le, 0.002);
+  const t = Math.min(1, Math.max(0, (x - le) / c));
+  const tcl = Math.max(sp.tc * c, sp.minThick ?? 0.0008) / c;
+  const y = camberLine(t, sp.camber) * c + (upper ? 1 : -1) * halfThick(t, tcl) * c;
+  return v3(s, y, x);
+}
+
 /**
  * Body-space placement of a panel: root leading edge at `origin`, incidence
  * (nose-up chord) then dihedral, optionally mirrored to the left side.

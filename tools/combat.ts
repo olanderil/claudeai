@@ -178,4 +178,5 @@ console.log('\nParked scout scrambles:');
 }
 
 console.log(failures === 0 ? '\nAll combat checks passed.\n' : `\n${failures} check(s) failed.\n`);
-process.exit(failures === 0 ? 0 : 1);
+// Node's exit code, without pulling in @types/node for one line.
+(globalThis as unknown as { process: { exitCode: number } }).process.exitCode = failures === 0 ? 0 : 1;

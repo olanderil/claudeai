@@ -112,14 +112,16 @@ export class Biquad {
   }
 
   /**
-   * Filter a buffer that will be played as a seamless loop: one warm-up pass
-   * brings the filter to its periodic steady state, the second writes output,
-   * so the tail of the loop flows into its head with no seam.
+   * Filter a buffer that will be played as a seamless loop: a warm-up over the
+   * loop's tail brings the filter to its periodic steady state, then the real
+   * pass writes output, so the end of the loop flows into its head with no seam.
+   * `warm` samples must span many time constants of the slowest pole; the
+   * default (~170 ms at 48 kHz) covers anything with Q/(πf) under ~15 ms.
    */
-  runLoop(src: Float32Array, dst: Float32Array = src): Float32Array {
+  runLoop(src: Float32Array, dst: Float32Array = src, warm = 8192): Float32Array {
     const b0 = this.b0, b1 = this.b1, b2 = this.b2, a1 = this.a1, a2 = this.a2;
     let z1 = this.z1, z2 = this.z2;
-    for (let i = 0, n = src.length; i < n; i++) {
+    for (let i = Math.max(0, src.length - warm), n = src.length; i < n; i++) {
       const x = src[i];
       const y = b0 * x + z1;
       z1 = b1 * x - a1 * y + z2;
@@ -128,6 +130,22 @@ export class Biquad {
     this.z1 = z1;
     this.z2 = z2;
     return this.run(src, dst);
+  }
+}
+
+/**
+ * A parallel filter bank over a loop, in one pass: `dst += Σ gains[k]·filters[k](src)`.
+ * Each filter is warmed over the loop's tail first, as in `runLoop`.
+ */
+export function bankLoop(src: Float32Array, filters: Biquad[], gains: number[], dst: Float32Array, warm = 8192): void {
+  const n = src.length;
+  for (const f of filters) for (let i = Math.max(0, n - warm); i < n; i++) f.tick(src[i]);
+  const k = filters.length;
+  for (let i = 0; i < n; i++) {
+    const x = src[i];
+    let acc = 0;
+    for (let j = 0; j < k; j++) acc += gains[j] * filters[j].tick(x);
+    dst[i] += acc;
   }
 }
 

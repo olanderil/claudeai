@@ -33,6 +33,8 @@ export interface TerrainStyle {
    * out; stated where the palette would guess wrong.
    */
   wooded?: number;
+  /** Height below which the ground is beach sand, metres. Defaults by coast. */
+  beach?: number;
 }
 
 /** Which kinds of tree grow here, as relative shares of the scatter. */
@@ -71,6 +73,8 @@ export interface WorldPreset {
   flatRoofs?: boolean;
   /** Share of roads lined with trees, 0..1. */
   roadTrees?: number;
+  /** How much of the open country is laid out in fields, 0..1. */
+  farmland?: number;
   /** The front line through this world. */
   front?: FrontSettings;
   /** Tree kinds, for the 3D scatter. */
@@ -341,6 +345,7 @@ const TEMPERATE_TREES: TreePalette = { broadleaf: 1, conifer: 0.08, poplar: 1, p
 export const WORLD_PRESETS: WorldPreset[] = [
   {
     name: 'FLANDERS',
+    farmland: 1.0,
     blurb: 'Flat, drowned polder around a ruined cloth-hall town. The mud never dries.',
     fieldElevation: 14,
     hasOcean: true,
@@ -350,8 +355,8 @@ export const WORLD_PRESETS: WorldPreset[] = [
     trees: { broadleaf: 1, conifer: 0, poplar: 1.3, palm: 0, shrub: 0.25 },
     landmarkDensity: { castle: 0.4, monastery: 0.8 },
     style: {
-      grass: [0.12, 0.21, 0.075], dry: [0.29, 0.26, 0.17], rock: [0.33, 0.32, 0.30],
-      snowLine: 1500, treeLine: 900, strata: 0, wooded: 0.55,
+      grass: [0.11, 0.165, 0.065], dry: [0.27, 0.235, 0.155], rock: [0.33, 0.32, 0.30],
+      snowLine: 1500, treeLine: 900, strata: 0, wooded: 0.42, beach: 5,
     },
     rivers: { depth: 7, count: 7, sourceMin: 22, sourceMax: 60, endAt: 0,
               widthNear: 12, widthFar: 30, sourceCell: 4000 },
@@ -359,6 +364,7 @@ export const WORLD_PRESETS: WorldPreset[] = [
   },
   {
     name: 'SOMME',
+    farmland: 0.95,
     blurb: 'Rolling chalk downland. Every trench is a white scar; every wood a stand of stumps.',
     fieldElevation: 110,
     hasOcean: false,
@@ -367,7 +373,7 @@ export const WORLD_PRESETS: WorldPreset[] = [
     front: { offset: 4100, amplitude: 850, wavelength: 16000, width: 420, craters: 1, chalk: 1, flooded: 0.2 },
     trees: TEMPERATE_TREES,
     style: {
-      grass: [0.16, 0.245, 0.085], dry: [0.43, 0.39, 0.24], rock: [0.60, 0.585, 0.54],
+      grass: [0.14, 0.19, 0.075], dry: [0.40, 0.36, 0.23], rock: [0.60, 0.585, 0.54],
       snowLine: 1600, treeLine: 900, strata: 0, wooded: 0.6,
     },
     rivers: { depth: 12, count: 7, sourceMin: 120, sourceMax: 190, endAt: 70,
@@ -376,6 +382,7 @@ export const WORLD_PRESETS: WorldPreset[] = [
   },
   {
     name: 'VERDUN',
+    farmland: 0.55,
     blurb: 'Steep wooded heights above the Meuse, ringed with forts. Near the line, not a tree stands.',
     fieldElevation: 300,
     hasOcean: false,
@@ -383,9 +390,9 @@ export const WORLD_PRESETS: WorldPreset[] = [
     roadTrees: 0.35,
     front: { offset: 4300, amplitude: 700, wavelength: 12000, width: 640, craters: 1, chalk: 0.45, flooded: 0.3 },
     trees: { broadleaf: 1, conifer: 0.3, poplar: 0.5, palm: 0, shrub: 0.1 },
-    landmarkDensity: { castle: 1.8, monastery: 0.6 },
+    landmarkDensity: { castle: 0.5, monastery: 0.5, fort: 1.6 },
     style: {
-      grass: [0.12, 0.21, 0.075], dry: [0.36, 0.33, 0.22], rock: [0.50, 0.48, 0.43],
+      grass: [0.11, 0.17, 0.068], dry: [0.34, 0.31, 0.21], rock: [0.50, 0.48, 0.43],
       snowLine: 1400, treeLine: 1200, strata: 0, wooded: 0.95,
     },
     rivers: { depth: 12, count: 8, sourceMin: 260, sourceMax: 380, endAt: 200,
@@ -394,6 +401,7 @@ export const WORLD_PRESETS: WorldPreset[] = [
   },
   {
     name: 'ISONZO',
+    farmland: 0.3,
     blurb: 'The Carso: a stone plateau pocked with sinkholes, the Adriatic at your back.',
     fieldElevation: 40,
     hasOcean: true,
@@ -412,6 +420,7 @@ export const WORLD_PRESETS: WorldPreset[] = [
   },
   {
     name: 'DOLOMITES',
+    farmland: 0.35,
     blurb: 'War in the high Alps: trenches cut in snow and rock between pale dolomite towers.',
     fieldElevation: 1210,
     hasOcean: false,
@@ -429,6 +438,7 @@ export const WORLD_PRESETS: WorldPreset[] = [
   },
   {
     name: 'GALLIPOLI',
+    farmland: 0.25,
     blurb: 'Scrub ridges and sheer gullies above the Aegean. The heights are theirs.',
     fieldElevation: 30,
     hasOcean: true,
@@ -447,6 +457,7 @@ export const WORLD_PRESETS: WorldPreset[] = [
   },
   {
     name: 'SINAI',
+    farmland: 0.0,
     blurb: 'Sand, scrub and wells: the Gaza line across the dunes, the sea at the western edge.',
     fieldElevation: 60,
     hasOcean: true,
@@ -603,7 +614,7 @@ function replanAll(): void {
   planSettlements(naturalHeight, {
     enabled: active.hasVillages !== false,
     seed: currentSeed,
-    minElevation: Math.max(6, field - 500),
+    minElevation: Math.max(5, field - 500),
     maxElevation: field + 1100,
     exclusion: FIELD_FALLOFF + 900,
     spacing: active.villageSpacing ?? 5200,

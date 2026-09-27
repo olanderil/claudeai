@@ -10,7 +10,7 @@
 
 import { ENGINE_SPECS, type ClipName, type GunKind } from './bank';
 import type { ClipCache } from './cache';
-import { Spatial, airCutoff, clamp, clamp01, distGain, fin, glide, type Listener, type Vec3 } from './space';
+import { Spatial, airCutoff, clamp, clamp01, distGain, fin, glide, type Listener } from './space';
 
 export type EngineKind = 'rotary' | 'inline' | 'heavy';
 
@@ -63,8 +63,10 @@ interface KindSpec {
   refHi: number;
   refLo: number;
   blades: number;
-  /** Voice level at `ref` metres. */
+  /** Voice level at `ref` metres (other aircraft, and the player seen from outside). */
   level: number;
+  /** The player's own engine from the cockpit. */
+  cockpitLevel: number;
   ref: number;
   propTone: number;
   propNoise: number;
@@ -80,17 +82,17 @@ export const KINDS: Record<EngineKind, KindSpec> = {
   rotary: {
     rpmMax: 1250, hi: 'eng.rotary.hi', lo: 'eng.rotary.lo',
     refHi: ENGINE_SPECS.rotary.hi.refRpm, refLo: ENGINE_SPECS.rotary.lo.refRpm,
-    blades: 2, level: 0.5, ref: 12, propTone: 0.2, propNoise: 0.28, whine: 0.05, whineMul: 18, twin: false, crackle: 0,
+    blades: 2, level: 0.4, cockpitLevel: 0.2, ref: 12, propTone: 0.2, propNoise: 0.28, whine: 0.05, whineMul: 18, twin: false, crackle: 0,
   },
   inline: {
     rpmMax: 1700, hi: 'eng.inline.hi', lo: 'eng.inline.lo',
     refHi: ENGINE_SPECS.inline.hi.refRpm, refLo: ENGINE_SPECS.inline.lo.refRpm,
-    blades: 2, level: 0.5, ref: 12, propTone: 0.22, propNoise: 0.26, whine: 0.025, whineMul: 12, twin: false, crackle: 1,
+    blades: 2, level: 0.32, cockpitLevel: 0.17, ref: 12, propTone: 0.22, propNoise: 0.26, whine: 0.025, whineMul: 12, twin: false, crackle: 1,
   },
   heavy: {
     rpmMax: 1450, hi: 'eng.heavy.hi', lo: 'eng.heavy.lo',
     refHi: ENGINE_SPECS.heavy.hi.refRpm, refLo: ENGINE_SPECS.heavy.lo.refRpm,
-    blades: 2, level: 0.5, ref: 22, propTone: 0.26, propNoise: 0.22, whine: 0, whineMul: 0, twin: true, crackle: 0.5,
+    blades: 2, level: 0.45, cockpitLevel: 0.2, ref: 22, propTone: 0.26, propNoise: 0.22, whine: 0, whineMul: 0, twin: true, crackle: 0.5,
   },
 };
 
@@ -153,6 +155,8 @@ export class EngineVoice {
   private readonly whineOsc: OscillatorNode | null = null;
   private readonly whineMod: GainNode | null = null;
   private readonly whineGain: GainNode | null = null;
+  private readonly whineBp: BiquadFilterNode | null = null;
+  private readonly whineBpMod: GainNode | null = null;
   private readonly nodes: AudioNode[] = [];
   private readonly sources: AudioScheduledSourceNode[] = [];
 
@@ -309,9 +313,6 @@ export class EngineVoice {
     }
   }
 
-  private whineBp: BiquadFilterNode | null = null;
-  private whineBpMod: GainNode | null = null;
-
   private node<T extends AudioNode>(n: T): T {
     this.nodes.push(n);
     return n;
@@ -378,8 +379,7 @@ export class EngineVoice {
     }
 
     glide(this.tone.gain, cockpit ? 5 : 0, now, 0.2);
-    const view = r.isPlayer ? (L.cockpit ? 1 : 0.7) : 1;
-    const level = this.dead ? 0 : K.level * view * distGain(d, K.ref);
+    const level = this.dead ? 0 : cockpit ? K.cockpitLevel : K.level * (r.isPlayer ? 0.7 : 1) * distGain(d, K.ref);
     const verb = cockpit ? 0 : 0.5 * clamp01(0.05 + d / 1500);
     this.sp.steer(now, rel, level, verb, cockpit ? 20000 : airCutoff(d), cockpit ? 0.1 : 0.04);
 
@@ -529,6 +529,7 @@ export class GunVoice {
   stamp = -1;
   lastFiring = 0;
   lastDist = 0;
+  endAt = 0;
 
   private readonly mix: Mix;
   private readonly sp: Spatial;
@@ -546,6 +547,7 @@ export class GunVoice {
   private vz = 0;
   private hasPos = false;
   private dop = 1;
+  private fresh = true;
 
   constructor(mix: Mix, id: number, kind: GunKind, guns: number, isPlayer: boolean) {
     this.mix = mix;
@@ -611,11 +613,14 @@ export class GunVoice {
       this.dop = this.isPlayer ? 1 : L.doppler(this.x, this.y, this.z, this.vx, this.vy, this.vz);
     }
     this.lastDist = d;
-    const level = this.isPlayer ? (L.cockpit ? 0.9 : 0.6 * distGain(d, 10)) : 0.75 * distGain(d, 8, 0.92);
+    const level = this.isPlayer ? (L.cockpit ? 0.9 : 0.6 * distGain(d, 10)) : distGain(d, 12, 0.8);
     const verb = cockpit ? 0.05 : clamp(0.08 + d / 800, 0, 0.6);
-    this.sp.steer(now, rel, level, verb, cockpit ? 20000 : airCutoff(d));
+    // A new voice starts at full level: the first round of a burst must not be swallowed by a fade-in.
+    if (this.fresh) this.sp.place(rel, level, verb, cockpit ? 20000 : airCutoff(d));
+    else this.sp.steer(now, rel, level, verb, cockpit ? 20000 : airCutoff(d));
+    this.fresh = false;
     // Other people's guns: the body is near-field and aimed away, so at range what arrives is the crack.
-    glide(this.thin.frequency, cockpit ? 25 : 40 + 650 * clamp01((d - 15) / 300), now, 0.05);
+    glide(this.thin.frequency, cockpit ? 25 : 40 + 400 * clamp01((d - 15) / 300), now, 0.05);
     const spread = cockpit ? 0.25 : 0;
     for (let g = 0; g < 2; g++) {
       const p = this.ins[g];
@@ -681,6 +686,17 @@ export class GunVoice {
       if (p.end > now) this.pend[w++] = p;
     }
     this.pend.length = w;
+  }
+
+  /** Stop: no further rounds, fade what is sounding over ~10 ms; dispose() once `endAt` has passed. */
+  release(now: number): void {
+    this.firing = false;
+    this.next[0] = 0;
+    this.next[1] = 0;
+    this.cancel(now);
+    this.sp.input.gain.cancelScheduledValues(now);
+    this.sp.input.gain.setTargetAtTime(0, now, 0.01);
+    this.endAt = now + 0.08;
   }
 
   dispose(now: number): void {
@@ -828,4 +844,3 @@ export class WindVoice {
   }
 }
 
-export type { Vec3 };

@@ -45,7 +45,7 @@ export class Kit {
   readonly hit = new Map<string, THREE.Box3>();
 
   constructor(readonly atlas: SkinAtlas, readonly detail: Detail) {
-    this.node('static', v3());
+    this.nodes.set('static', { name: 'static', parent: null, pivot: v3(), axis: v3(1, 0, 0), flags: {}, geos: new Map() });
   }
 
   /** Pick a count by detail level. */

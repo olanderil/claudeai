@@ -358,12 +358,12 @@ const SHOTS: ShotSpec[] = [
     look: [0, 0.9, -1.2], fov: [58, 52], roll: -0.09, lag: 6, dof: 0.9, float: 4e-3,
   },
   {
-    // Ahead of the wing and above it, looking down and back into the open
+    // Ahead of the wing and well above it, looking down and back into the open
     // cockpit: the pilot's head over the coaming, the gun breeches in front of
-    // him. Above the upper wing on purpose — from level with it, the wing is
-    // all you would see.
-    name: 'open cockpit', scale: 'close', side: 1, from: [6.5, 3.2, -5.0],
-    to: [4.2, 2.4, -2.6], look: [0, 1.0, 0.5], fov: [52, 46], lag: 6, dof: 0.96, float: 5e-3,
+    // him. Steep on purpose — the pilot sits just behind the top wing's
+    // trailing edge, and from any shallower the wing is all you would see.
+    name: 'open cockpit', scale: 'close', side: 1, from: [5.8, 5.0, -4.2],
+    to: [3.5, 4.0, -1.8], look: [0, 1.0, 0.5], fov: [52, 46], lag: 6, dof: 0.96, float: 5e-3,
   },
   {
     name: 'tail chase', scale: 'close', side: 0, from: [0, 2.2, 12], to: [0, 1.7, 7.5],
@@ -604,11 +604,13 @@ const SHOTS: ShotSpec[] = [
   // between the player and the enemy (`azimuth: 'target'`), aim between the
   // two (`pair`), and open the lens as they separate so neither leaves frame.
   {
-    // Over the Vickers breeches, a hand's width above the pilot's eye: the
-    // gun camera. Aims down the barrels and drifts onto the bandit when he is
-    // near the sight.
+    // Down the Vickers: from just ahead of the pilot's eye, where his sight
+    // line already clears the coaming, the windscreen and the top wing, so the
+    // lens can be nowhere the airframe is. The breeches sit at the foot of the
+    // frame; it aims down the barrels and drifts onto the bandit when he is
+    // near the sight — the gun camera.
     name: 'guns-eye', scale: 'close', side: 0, mount: 'eye', guns: true, interior: true,
-    from: [0.0, 0.14, -0.32], to: [0.0, 0.12, -0.42], look: [0, 0.1, -80],
+    from: [0.0, 0.03, -0.1], to: [0.0, 0.02, -0.16], look: [0, 0.02, -80],
     fov: [46, 42], lag: 6, near: 0.05, combat: true, scenic: true, tags: ['engage'],
   },
   {
@@ -619,10 +621,10 @@ const SHOTS: ShotSpec[] = [
     tags: ['engage'],
   },
   {
-    // A wingman's view: from off the player's wing, looking across at the
-    // target.
+    // A wingman's view: from where a wingman flies — behind and off to one
+    // side — looking past the player at the target.
     name: 'wingman view', scale: 'medium', side: 1, azimuth: 'target', pair: 0.55,
-    from: [13, 3, 5], to: [10, 2.2, 2], lead: 0, fov: [50, 46], lag: 3,
+    from: [15, 4.5, 19], to: [11.5, 3.5, 14], lead: 0, fov: [50, 46], lag: 3,
     tags: ['engage'],
   },
   {
@@ -633,8 +635,9 @@ const SHOTS: ShotSpec[] = [
   },
   {
     // Low, just outboard of the wingtip, looking aft past the tailplane at the
-    // one on the player's tail — the view a gunner would have.
-    name: 'tail gunner', scale: 'medium', side: 1, azimuth: 'threat', pair: 0.6,
+    // one on the player's tail — the view a gunner would have. The player is
+    // the foreground here, cropped by the frame; the bandit is the subject.
+    name: 'tail gunner', scale: 'medium', side: 1, azimuth: 'threat', pair: 0.8,
     from: [5.4, -1.6, 2.5], to: [5.0, -1.2, 1.2], lead: 0, fov: [56, 50], lag: 4,
     tags: ['hit'],
   },
@@ -824,6 +827,11 @@ const COMBAT_SHARE = 0.75;
 const GAP = 5.2;
 /** Least height a director camera keeps above the ground, metres. */
 const FLOOR = 3;
+/**
+ * Nearer than this to the lens, metres at the reference scale, the subject of
+ * a two-shot is foreground and may be cropped.
+ */
+const FOREGROUND = 6.5;
 /** Pilot's eye, body frame, when the subject does not say. */
 const DEFAULT_EYE = new THREE.Vector3(0, 1.0, 0.5);
 /** How far off the nose the guns-eye will drift toward a target, radians. */
@@ -885,6 +893,12 @@ export interface ShotInfo {
   combat: boolean;
   /** Needs an enemy in reach to mean anything. */
   needsTarget: boolean;
+  /** Bolted to the airframe: an on-board camera. */
+  mounted: boolean;
+  /** Frames two aircraft — the player and whoever `framing` names. */
+  pair: boolean;
+  /** Whose shot it is: the player's, or the enemy's. */
+  subject: 'player' | 'target';
 }
 
 /**
@@ -925,6 +939,9 @@ export function shotCatalogue(): ShotInfo[] {
         flourish: false,
         combat: false,
         needsTarget: false,
+        mounted: false,
+        pair: false,
+        subject: 'player',
       });
       continue;
     }
@@ -949,6 +966,9 @@ function describe(s: ShotSpec): ShotInfo {
     flourish: s.tags?.includes('flourish') === true,
     combat: isCombat(s),
     needsTarget: needsTarget(s) || needsThreat(s),
+    mounted: s.mount !== undefined,
+    pair: s.pair !== undefined,
+    subject: s.subject === 'target' ? 'target' : 'player',
   };
 }
 
@@ -1101,6 +1121,8 @@ export class CinematicDirector {
   private pairFov = 0;
   /** Where along a merge tripod's shot the two are expected to pass. */
   private mergePass = 0.5;
+  /** A fight is on — for cutting to it once when it starts. */
+  private engaged = false;
 
   get shotName(): string {
     return this.shot.name;
@@ -1557,6 +1579,20 @@ export class CinematicDirector {
       this.playerVel.set(0, 0, -1).applyQuaternion(quat).multiplyScalar(t.tas);
     }
     this.beat = this.manoeuvreBeat(t);
+    // A fight opening is a moment a director cuts *to*, whether or not anyone
+    // says so: the first time a bandit comes well inside reach, the hands-off
+    // sequence asks itself for an engagement shot. Entered at four-fifths of
+    // the combat range and left at a little past it, so a target hovering at
+    // the edge does not ring the bell every second.
+    const gap = this.target !== null ? this.target.position.distanceTo(pos) : Infinity;
+    if (!this.engaged && gap < COMBAT_RANGE * 0.8) {
+      this.engaged = true;
+      if (this.started && !this.pinned && this.queue === null && this.pending === null) {
+        this.request('engage');
+      }
+    } else if (this.engaged && gap > COMBAT_RANGE * 1.15) {
+      this.engaged = false;
+    }
     // A pinned shot still *plays* — its move runs to the end — it simply never
     // hands over to the next one. The clock is the cap, and a beat can bring
     // the cut forward inside the last stretch of it.
@@ -1759,6 +1795,9 @@ export class CinematicDirector {
     // still keeps its opening lens, and a doubled dolly zoom doubles.
     let fov = lerp(this.legFov(shot, 0), this.legFov(shot, 1), clamp(move, 0, 1.6));
     if (this.role === 'player') fov += clamp(t.tas / 70, 0, 1.1) * 3;
+    // A tripod is allowed to let them fly out of the picture — that is what a
+    // camera standing still does — so its lens only opens so far to hold them.
+    if (shot.locked && fit > 0) fit = Math.min(fit, lerp(this.legFov(shot, 0), this.legFov(shot, 1), 0.5) + 22);
     if (fit > 0) {
       // Opens quickly and closes slowly: late to widen is an aircraft out of
       // frame, late to narrow is only a lens that breathes.
@@ -1929,9 +1968,15 @@ export class CinematicDirector {
     const toSubject = this._r.copy(this.sPos).sub(this.position);
     const dS = Math.max(toSubject.length(), 1);
     toSubject.divideScalar(dS);
-    // Half-angles from the aim to each aircraft, plus the aircraft itself.
-    const hs = aim.angleTo(toSubject) + Math.atan((3.2 * this.sScale) / dS);
-    const ho = aim.angleTo(toOther) + Math.atan((3.2 * this.otherScale) / dO);
+    // Half-angles from the aim to each aircraft, plus the aircraft itself —
+    // all of it when it is out in the frame, less as it comes close: an
+    // aeroplane five metres off the lens is foreground, and cropping it is the
+    // composition, not a fault.
+    // Nearer than that, the subject is the frame's foreground — a tailplane
+    // across one corner — and only the other aircraft has to be held.
+    const hs = dS < FOREGROUND * this.sScale ? 0
+      : aim.angleTo(toSubject) + Math.atan(framePad(dS, this.sScale) / dS);
+    const ho = aim.angleTo(toOther) + Math.atan(framePad(dO, this.otherScale) / dO);
     return 2 * Math.max(hs, ho) * (180 / Math.PI) * 1.08;
   }
 
@@ -2359,35 +2404,57 @@ export class CinematicDirector {
       if (vv > 4) tau = -(rx * vx + ry * vy + rz * vz) / vv;
     }
     const meet = this._a;
-    if (tg !== null && tau > 0.5 && tau < dur * 0.85) {
-      meet.copy(pos).addScaledVector(vP, tau)
-        .add(this._b.copy(tg.position).addScaledVector(tg.velocity, tau))
-        .multiplyScalar(0.5);
-      this.mergePass = tau / dur;
-    } else {
-      tau = Math.max(dur * 0.45, REACH_MIN * s / Math.max(vP.length(), 1));
-      meet.copy(pos).addScaledVector(vP, tau);
-      if (vP.lengthSq() < 1) meet.addScaledVector(this._b.set(0, 0, -1).applyQuaternion(quat), REACH_MIN * s);
-      this.mergePass = clamp(tau / dur, 0.1, 0.9);
-    }
-    // Off to the side of the player's track.
+    // Right of the player's track: where the tripod stands, unless the two of
+    // them pass side by side, when that would put it next to one and a long
+    // way from the other.
     const fwd = this._b.set(vP.x, 0, vP.z);
     if (fwd.lengthSq() < 1e-3) fwd.set(0, 0, -1).applyQuaternion(yawOf(quat, this._q)).setY(0);
     fwd.normalize();
+    const away = this._c.set(-fwd.z, 0, fwd.x);
+    if (tg !== null && tau > 0.5 && tau < dur * 0.85) {
+      const pAt = this._r.copy(pos).addScaledVector(vP, tau);
+      const tAt = this._u.copy(tg.position).addScaledVector(tg.velocity, tau);
+      meet.copy(pAt).add(tAt).multiplyScalar(0.5);
+      this.mergePass = tau / dur;
+      // Stand in the plane halfway between them, so both go by at the same
+      // distance: the sideways direction with the part along their separation
+      // taken out — or, passing wingtip to wingtip, above the pass instead.
+      const sep = tAt.sub(pAt);
+      if (sep.lengthSq() > 1) {
+        sep.normalize();
+        away.addScaledVector(sep, -away.dot(sep));
+        if (away.lengthSq() < 0.2) {
+          away.set(0, 1, 0).addScaledVector(sep, -sep.y);
+        }
+        away.normalize();
+      }
+    } else {
+      tau = Math.max(dur * 0.45, REACH_MIN * s / Math.max(vP.length(), 1));
+      meet.copy(pos).addScaledVector(vP, tau);
+      if (vP.lengthSq() < 1) meet.addScaledVector(this._r.set(0, 0, -1).applyQuaternion(quat), REACH_MIN * s);
+      this.mergePass = clamp(tau / dur, 0.1, 0.9);
+    }
     const lf = this.legFrom(shot);
     const side = lf[0] * this.side * t.scale * s;
+    // The operator's swing turns the tripod about the meeting point.
     const c = Math.cos(t.azimuth * this.side);
     const sn = Math.sin(t.azimuth * this.side);
-    // Right of track is (-fz, 0, fx); the tweak's swing turns it about the meet.
-    const rx = -fwd.z;
-    const rz = fwd.x;
-    const ox = side * (rx * c - fwd.x * sn);
-    const oz = side * (rz * c - fwd.z * sn);
-    this.anchor.set(meet.x + ox, meet.y + lf[1] * t.scale * s + t.height, meet.z + oz);
+    const ox = side * (away.x * c - away.z * sn);
+    const oz = side * (away.x * sn + away.z * c);
+    const oy = side * away.y;
+    this.anchor.set(meet.x + ox, meet.y + oy + lf[1] * t.scale * s + t.height, meet.z + oz);
   }
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
+
+/**
+ * How much of an aircraft round its CG a two-shot keeps in frame, metres: the
+ * half-span and a little at a distance, shrinking to a scrap of it up close.
+ */
+function framePad(dist: number, scale: number): number {
+  return scale * (0.8 + 2.4 * clamp((dist / scale - 5) / 10, 0, 1));
+}
 
 /** A landmark's size for the anchored shots: the larger of height and spread. */
 function tripodBulk(st: LandmarkTarget): number {

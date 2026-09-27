@@ -195,7 +195,6 @@ const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
 
 // ---------------------------------------------------------------- transforms
 
-const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler();
 

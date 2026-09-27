@@ -274,7 +274,23 @@ export function behindLines(x: number, z: number): number {
  */
 export function devastation(u: number): number {
   if (u <= 0) return 1;
-  return 0.92 * Math.exp(-u / 520) + 0.12 * (1 - smoothstep(1200, 3000, u));
+  return 0.95 * Math.exp(-u / 380) + 0.06 * (1 - smoothstep(1000, 2800, u));
+}
+
+/**
+ * How hard this patch of ground was shelled, 0..1: barrages walk, and some
+ * ground is hit again and again while some survives. Sines rather than noise
+ * so the shader's twin (`bfLump`) matches exactly.
+ */
+export function shellLump(x: number, z: number): number {
+  const v = 0.5 + 0.3 * Math.sin(x * 0.0047 + 1.3) * Math.cos(z * 0.0041 - 0.7)
+    + 0.2 * Math.sin((x + z) * 0.0029 + 2.1);
+  return smoothstep(0.3, 0.7, v);
+}
+
+/** Crater density at a point: depth behind the lines, the world's setting and the lumping. */
+function craterDensity(x: number, z: number, u: number): number {
+  return devastation(u) * settings.craters * lerp(0.55, 1, shellLump(x, z));
 }
 
 // -------------------------------------------------------------------- craters
@@ -303,7 +319,7 @@ export function craterHeight(x: number, z: number): number {
   if (u > 420) return 0;
 
   let dh = 0;
-  const dens = devastation(u) * settings.craters;
+  const dens = craterDensity(x, z, u);
   if (dens > 0.25) {
     // Heavy shells: the 2x2 cells nearest the sample. Centres are held inside
     // the middle half of each cell and reach at most 0.72 cell, so no crater
@@ -365,10 +381,11 @@ function floodedCrater(x: number, z: number): boolean {
   const d = frontDistance(x, z);
   const side: 1 | -1 = d >= 0 ? 1 : -1;
   const u = Math.abs(d) - nmlHalf(x, side);
-  const dens = devastation(u) * settings.craters;
+  const dens = craterDensity(x, z, u);
   if (dens < 0.05) return false;
+  const wetShare = settings.flooded * 0.45;
   for (const [cell, salt, share, rMin, rSpan] of [
-    [C1, SALT_C1, 0.9, 0.2, 0.25], [C2, SALT_C2, 1.0, 0.18, 0.26],
+    [C1, SALT_C1, 0.9, 0.2, 0.25], [C2, SALT_C2, 0.62, 0.18, 0.26],
   ] as const) {
     const gx = Math.floor(x / cell - 0.5);
     const gz = Math.floor(z / cell - 0.5);
@@ -377,7 +394,7 @@ function floodedCrater(x: number, z: number): boolean {
         const cx = gx + i;
         const cz = gz + j;
         if (hash01(cx, cz, salt + seedSalt) > dens * share) continue;
-        if (hash01(cx, cz, salt + 4 + seedSalt) > settings.flooded) continue;
+        if (hash01(cx, cz, salt + 4 + seedSalt) > wetShare) continue;
         const px = (cx + 0.25 + 0.5 * hash01(cx, cz, salt + 1 + seedSalt)) * cell;
         const pz = (cz + 0.25 + 0.5 * hash01(cx, cz, salt + 2 + seedSalt)) * cell;
         const R = (rMin + rSpan * hash01(cx, cz, salt + 3 + seedSalt)) * cell;
@@ -927,7 +944,12 @@ float bfEdge(float s, float side) {
 }
 float bfDensity(float u) {
   if (u <= 0.0) return 1.0;
-  return 0.92 * exp(-u / 520.0) + 0.12 * (1.0 - smoothstep(1200.0, 3000.0, u));
+  return 0.95 * exp(-u / 380.0) + 0.06 * (1.0 - smoothstep(1000.0, 2800.0, u));
+}
+float bfLump(vec2 p) {
+  float v = 0.5 + 0.3 * sin(p.x * 0.0047 + 1.3) * cos(p.y * 0.0041 - 0.7)
+          + 0.2 * sin((p.x + p.y) * 0.0029 + 2.1);
+  return smoothstep(0.3, 0.7, v);
 }
 uint bfHashU(ivec2 c, uint salt) {
   uint h = uint(c.x) * 374761393u + uint(c.y) * 668265263u + salt * 2246822519u;
