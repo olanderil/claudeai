@@ -75,6 +75,7 @@ const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
 const _s = new THREE.Vector3(1, 1, 1);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
 const rand = (a: number, b: number): number => a + Math.random() * (b - a);
 function randDir(out: THREE.Vector3): THREE.Vector3 {
@@ -113,6 +114,11 @@ export class Battle implements PlaneEvents, TargetHooks {
   private readonly shootables: Shootable[] = [];
   /** Where the listener is, for whizzing rounds. */
   readonly ear = new THREE.Vector3();
+  /** 0 by day, 1 at night: searchlight beams fade in with it. */
+  night = 0;
+  private readonly beams = new Map<Target, THREE.Mesh>();
+  private beamGeo: THREE.BufferGeometry | null = null;
+  private beamMat: THREE.MeshBasicMaterial | null = null;
 
   constructor(private readonly exactGround: (x: number, z: number) => number, wet: (x: number, z: number) => boolean) {
     this.heights = new HeightCache(exactGround, wet);
@@ -152,6 +158,8 @@ export class Battle implements PlaneEvents, TargetHooks {
     this.planes.length = 0;
     for (const t of this.targets) t.dispose();
     this.targets.length = 0;
+    for (const b of this.beams.values()) b.removeFromParent();
+    this.beams.clear();
     this.player = null;
     this.ballistics.clear();
     this.fx.clear();
@@ -247,7 +255,43 @@ export class Battle implements PlaneEvents, TargetHooks {
     });
     this.stepBombs(dt);
     this.stepTargetGuns(dt);
+    this.stepSearchlights(dt);
     if (this.archie) this.stepArchie(dt);
+  }
+
+  /**
+   * Searchlights sweep the sky in slow arcs until an enemy machine comes
+   * within reach, then hold it — with a lag, as a crew cranking a 90 cm
+   * projector by hand would.
+   */
+  private stepSearchlights(dt: number): void {
+    for (const t of this.targets) {
+      if (t.kind !== 'searchlight' || !t.alive) continue;
+      let best: THREE.Vector3 | null = null;
+      let bd = 3200;
+      for (const p of this.planes) {
+        if (!p.alive || p.team === t.team) continue;
+        const d = p.position.distanceTo(t.position);
+        if (d < bd) {
+          bd = d;
+          best = p.position;
+        }
+      }
+      for (const z of this.targets) {
+        if (z.kind !== 'zeppelin' || !z.alive || z.team === t.team) continue;
+        const d = z.position.distanceTo(t.position);
+        if (d < bd) {
+          bd = d;
+          best = z.position;
+        }
+      }
+      if (best) _t1.subVectors(best, t.position).normalize();
+      else {
+        const a = this.time * 0.12 + t.base.x * 0.01;
+        _t1.set(Math.sin(a), 0.75 + 0.2 * Math.sin(a * 1.7), Math.cos(a * 0.8)).normalize();
+      }
+      t.aim.lerp(_t1, 1 - Math.exp(-dt * (best ? 1.4 : 0.6))).normalize();
+    }
   }
 
   private strike(target: Shootable, r: Round, point: THREE.Vector3): void {
@@ -635,10 +679,49 @@ export class Battle implements PlaneEvents, TargetHooks {
       if (p.state === 'dead' && p.deadT > 15 && !p.isPlayer) this.remove(p);
     }
     this.renderBombs();
+    this.renderBeams();
     this.ballistics.render();
     if (this.barrage > 0) this.stepBarrage(dt, camera.position);
     this.fx.update(dt);
     this.updateAudio();
+  }
+
+  private renderBeams(): void {
+    for (const t of this.targets) {
+      if (t.kind !== 'searchlight') continue;
+      let beam = this.beams.get(t);
+      if (!beam) {
+        if (!this.beamGeo || !this.beamMat) {
+          // An open cone, bright at the lamp and fading to nothing 2.5 km out.
+          const g = new THREE.CylinderGeometry(55, 0.6, 2500, 20, 8, true);
+          g.translate(0, 1250, 0);
+          const pos = g.getAttribute('position');
+          const col = new Float32Array(pos.count * 3);
+          for (let i = 0; i < pos.count; i++) {
+            const k = Math.pow(1 - pos.getY(i) / 2500, 2.2);
+            col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = k;
+          }
+          g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+          this.beamGeo = g;
+          this.beamMat = new THREE.MeshBasicMaterial({
+            color: new THREE.Color(1, 0.95, 0.82).multiplyScalar(0.22), vertexColors: true,
+            transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+            toneMapped: false, fog: false,
+          });
+        }
+        beam = new THREE.Mesh(this.beamGeo, this.beamMat);
+        beam.frustumCulled = false;
+        beam.renderOrder = 8;
+        this.group.add(beam);
+        this.beams.set(t, beam);
+      }
+      beam.visible = t.alive && this.night > 0.05;
+      if (!beam.visible) continue;
+      beam.position.copy(t.position);
+      beam.position.y += 2.2;
+      beam.quaternion.setFromUnitVectors(Y_AXIS, t.aim);
+    }
+    if (this.beamMat) this.beamMat.opacity = Math.min(1, this.night * 1.2);
   }
 
   private renderBombs(): void {

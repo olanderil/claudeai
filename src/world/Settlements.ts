@@ -1,5 +1,7 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { RAD, lerp, smoothstep } from '../util/math';
+import { behindLines } from './Front';
 
 /**
  * Villages and their airstrips.
@@ -32,10 +34,20 @@ export interface Airstrip {
   elevation: number;
 }
 
+/**
+ * What the war has left of a building. Decided per house from how far behind
+ * the lines it stands, so a village astride the front is rubble at one end and
+ * roofless shells at the other.
+ */
+export type HouseState = 'intact' | 'ruin' | 'rubble';
+
 interface House {
   x: number;
   z: number;
   y: number;
+  /** The church is the first building of every village. */
+  church: boolean;
+  state: HouseState;
   width: number;
   depth: number;
   height: number;
@@ -90,6 +102,10 @@ export interface SettlementOptions {
   exclusion: number;
   /** Spacing of the jittered placement grid, metres. */
   spacing: number;
+  /** Veto on a village site (the enemy aerodrome, water). */
+  siteAllowed?: (x: number, z: number) => boolean;
+  /** Veto on an airstrip site (too near the lines). */
+  stripAllowed?: (x: number, z: number) => boolean;
 }
 
 // -------------------------------------------------------------------- geometry
@@ -126,7 +142,7 @@ const MAX_STRIP_SEARCHES = 100;
 
 /** Flat, landable part of a strip. Comfortably longer than the takeoff roll. */
 const STRIP_HALF_LENGTH = 460;
-const STRIP_HALF_WIDTH = 34;
+const STRIP_HALF_WIDTH = 60;
 /**
  * How far the pad grades back into natural ground. Generous on purpose: a short
  * grade puts a visible step at the edge of the strip, and — because coarse LOD
@@ -188,19 +204,6 @@ const FIELD_GAP = 2400;
 const FIELD_SPACING = 3200;
 /** Ceiling on the added population, per world. */
 const MAX_FIELD_VILLAGES = 80;
-
-/**
- * Runway surface, drawn slightly proud of the pad it sits on.
- *
- * 30 m is a bush strip rather than an airport runway — wide black asphalt at
- * village scale reads as a motorway dropped in a field. The flattened pad is
- * wider still, so drifting off the gravel is untidy rather than fatal.
- */
-const RUNWAY_WIDTH = 30;
-const RUNWAY_LENGTH = STRIP_HALF_LENGTH * 2 - 20;
-const RUNWAY_TOP = 0.08;
-/** Edge markers per side. */
-const MARKERS = 9;
 
 // ----------------------------------------------------------------------- state
 
@@ -417,6 +420,7 @@ export function planSettlements(
         const cx = (gx + (cellRandom(gx, gz, salt + 2) - 0.5) * 0.72) * spacing;
         const cz = (gz + (cellRandom(gx, gz, salt + 3) - 0.5) * 0.72) * spacing;
         if (Math.hypot(cx, cz) < exclusion) continue;
+        if (opts.siteAllowed && !opts.siteAllowed(cx, cz)) continue;
 
         const centre = sample(cx, cz);
         if (centre < floor || centre > ceiling) continue;
@@ -458,6 +462,7 @@ export function planSettlements(
     const wantsStrip =
       strips.length < MAX_STRIPS &&
       stripSearches < MAX_STRIP_SEARCHES &&
+      (opts.stripAllowed === undefined || opts.stripAllowed(c.x, c.z)) &&
       strips.every((s) => Math.hypot(s.x - c.x, s.z - c.z) >= MIN_STRIP_SEPARATION);
     if (wantsStrip) stripSearches++;
 
@@ -469,8 +474,8 @@ export function planSettlements(
 
     villages.push({
       // Push the houses off to one side so the runway stays clear.
-      x: strip ? c.x + strip.dirZ * 320 : c.x,
-      z: strip ? c.z - strip.dirX * 320 : c.z,
+      x: strip ? c.x + strip.dirZ * 380 : c.x,
+      z: strip ? c.z - strip.dirX * 380 : c.z,
       elevation: strip ? strip.elevation : c.elevation,
       // Filled in by the layout, which is what chooses it.
       street: 0,
@@ -510,6 +515,7 @@ export function planSettlements(
       const cx = (gx + (cellRandom(gx, gz, salt + 32) - 0.5) * 0.72) * spacing;
       const cz = (gz + (cellRandom(gx, gz, salt + 33) - 0.5) * 0.72) * spacing;
       if (Math.hypot(cx, cz) < exclusion) continue;
+      if (opts.siteAllowed && !opts.siteAllowed(cx, cz)) continue;
 
       const centre = sample(cx, cz);
       if (centre < floor || centre > ceiling) continue;
@@ -706,6 +712,25 @@ const HOUSE_ROWS = [-2, -1, 1, 2];
 const HOUSE_COLS = 5;
 
 /**
+ * How much of a house is left, from how far behind the lines it stands.
+ *
+ * In no-man's-land nothing is; within a kilometre almost nothing; out to two
+ * and a half kilometres the villages are roofless shells, thinning to the odd
+ * gutted house among intact ones.
+ */
+function houseState(x: number, z: number, roll: number): HouseState {
+  const u = behindLines(x, z);
+  if (u < 0) return 'rubble';
+  if (u < 800) return roll < 0.72 ? 'rubble' : 'ruin';
+  if (u < 2500) {
+    const ruined = 1 - ((u - 800) / 1700) * 0.85;
+    if (roll < ruined * 0.25) return 'rubble';
+    return roll < ruined ? 'ruin' : 'intact';
+  }
+  return 'intact';
+}
+
+/**
  * Lay a village out on a jittered local grid.
  *
  * Slots rather than free scatter, so houses never intersect, and a single shared
@@ -734,6 +759,8 @@ function layoutHouses(v: Village, height: (x: number, z: number) => number): voi
       x,
       z,
       y: height(x, z),
+      church: v.houses.length === 0,
+      state: houseState(x, z, rnd(1100 + s)),
       width,
       depth,
       height: wallHeight,
@@ -790,11 +817,104 @@ function unitGable(): THREE.BufferGeometry {
   return geo;
 }
 
-/** Unit slab hanging below y = 0, so the top face lands exactly on the pad. */
-function unitSlab(): THREE.BufferGeometry {
-  const geo = new THREE.BoxGeometry(1, 1, 1);
-  geo.translate(0, -0.5, 0);
-  return geo;
+/** A box in unit or metre space, flattened for merging. */
+function slab(w: number, h: number, d: number, x: number, y: number, z: number, colour?: THREE.Color): THREE.BufferGeometry {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  geo.translate(x, y + h / 2, z);
+  if (colour) {
+    const n = geo.attributes.position.count;
+    const c = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { c[i * 3] = colour.r; c[i * 3 + 1] = colour.g; c[i * 3 + 2] = colour.b; }
+    geo.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  }
+  const flat = geo.toNonIndexed();
+  geo.dispose();
+  return flat;
+}
+
+/**
+ * A roofless shell: four walls broken off at different heights, gaps where
+ * whole stretches have come down, and a heap of fallen masonry inside.
+ *
+ * Unit footprint, unit wall height; the instance stretches it to the house it
+ * was. Three variants so a street of ruins is not one ruin repeated.
+ */
+function ruinShell(variant: number): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  const t = 0.075;
+  const r = (k: number): number => cellRandom(variant, k, 77);
+  const wall = (along: 'x' | 'z', offset: number, seed: number): void => {
+    const n = 5;
+    for (let k = 0; k < n; k++) {
+      const roll = r(seed + k);
+      // Some stretches gone to the footings, most broken off part way, the odd
+      // gable end still standing to the old roof line.
+      const h = roll < 0.18 ? 0.08 : roll > 0.9 ? 1.25 : 0.3 + r(seed + k + 40) * 0.7;
+      const len = 1 / n;
+      const c = -0.5 + len * (k + 0.5);
+      if (along === 'x') parts.push(slab(len * 1.02, h, t, c, 0, offset));
+      else parts.push(slab(t, h, len * 1.02, offset, 0, c));
+    }
+  };
+  wall('x', -0.5 + t / 2, 0);
+  wall('x', 0.5 - t / 2, 10);
+  wall('z', -0.5 + t / 2, 20);
+  wall('z', 0.5 - t / 2, 30);
+  // Fallen roof and masonry inside.
+  parts.push(slab(0.62, 0.16, 0.5, (r(50) - 0.5) * 0.2, 0, (r(51) - 0.5) * 0.2));
+  parts.push(slab(0.3, 0.1, 0.34, (r(52) - 0.5) * 0.4, 0.14, (r(53) - 0.5) * 0.4));
+  return mergeGeometries(parts, false);
+}
+
+/** A heap of brick and stone with one stub of wall standing out of it. */
+function rubbleMound(): THREE.BufferGeometry {
+  const geo = new THREE.IcosahedronGeometry(0.5, 1);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    let y = pos.getY(i);
+    const z = pos.getZ(i);
+    const jitter = 0.78 + 0.4 * cellRandom(Math.round(x * 97), Math.round(z * 89 + y * 31), 5);
+    y = Math.max(0, y) * 0.42 * jitter;
+    pos.setXYZ(i, x * (0.9 + 0.2 * jitter), y, z * (0.9 + 0.2 * jitter));
+  }
+  geo.computeVertexNormals();
+  const mound = geo.toNonIndexed();
+  geo.dispose();
+  mound.deleteAttribute('uv');
+  const stub = slab(0.08, 0.55, 0.32, 0.28, 0, -0.1);
+  stub.deleteAttribute('uv');
+  return mergeGeometries([mound, stub], false);
+}
+
+/** Church tower and spire, in metres, base at y = 0, centred on its footprint. */
+function towerGeometry(): THREE.BufferGeometry {
+  const stone = new THREE.Color(0.66, 0.63, 0.57);
+  const slate = new THREE.Color(0.20, 0.22, 0.25);
+  const spire = new THREE.ConeGeometry(3.9, 12, 4, 1);
+  spire.rotateY(Math.PI / 4);
+  spire.translate(0, 19 + 6, 0);
+  const n = spire.attributes.position.count;
+  const c = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { c[i * 3] = slate.r; c[i * 3 + 1] = slate.g; c[i * 3 + 2] = slate.b; }
+  spire.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  const flatSpire = spire.toNonIndexed();
+  spire.dispose();
+  return mergeGeometries([
+    slab(5.6, 19, 5.6, 0, 0, 0, stone),
+    slab(6.0, 0.6, 6.0, 0, 18.6, 0, stone.clone().multiplyScalar(0.85)),
+    flatSpire,
+  ], false);
+}
+
+/** What shellfire leaves of a tower: a stump with a broken, stepped top. */
+function towerStump(): THREE.BufferGeometry {
+  const stone = new THREE.Color(0.55, 0.52, 0.47);
+  const parts: THREE.BufferGeometry[] = [slab(5.6, 5, 5.6, 0, 0, 0, stone)];
+  const heights = [9.5, 6.5, 12.5, 7.5];
+  const offs: [number, number][] = [[-1.4, -1.4], [1.4, -1.4], [-1.4, 1.4], [1.4, 1.4]];
+  offs.forEach(([x, z], k) => parts.push(slab(2.8, heights[k], 2.8, x, 0, z, stone)));
+  return mergeGeometries(parts, false);
 }
 
 function instanced(
@@ -810,48 +930,45 @@ function instanced(
   return mesh;
 }
 
-/**
- * Build every village and strip in the current plan into one group.
- *
- * `groundTone` is the current world's dry-ground colour, and the graded earth
- * and gravel are derived from it. A fixed pair of tones cannot work across six
- * palettes — the olive shoulder that looks like turned soil in green country
- * reads as a green stripe painted across a desert.
- *
- * Everything is instanced: a few hundred houses and runway markings cost five
- * draw calls rather than five hundred, which is what makes it affordable to
- * leave the whole map's settlements resident instead of streaming them.
- */
-export function buildSettlementMeshes(groundTone: [number, number, number]): THREE.Group {
-  const group = new THREE.Group();
+export interface SettlementMeshOptions {
+  /** Flat-roofed houses (the Levant): a low slab rather than a pitched roof. */
+  flatRoofs?: boolean;
+}
 
-  const houses = villages.flatMap((v) => v.houses);
-  const markersPerStrip = MARKERS * 2 + 2;
+/**
+ * Build every village in the current plan into one group: intact houses and
+ * their churches, the shells of the ones near the lines, and the rubble of the
+ * ones on them.
+ *
+ * `groundTone` is the world's dry-ground colour; the rubble is derived from it
+ * so a ruined village sits in its own country's dust.
+ */
+export function buildSettlementMeshes(
+  groundTone: [number, number, number],
+  opts: SettlementMeshOptions = {},
+): THREE.Group {
+  const group = new THREE.Group();
+  const all = villages.flatMap((v) => v.houses.map((h) => ({ h, v })));
+  if (all.length === 0) return group;
 
   const wallMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
   const roofMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82 });
-  // Graded earth around a pale gravel strip. Two close, dusty tones read as a
-  // rural airfield; a black slab on green reads as a road.
-  const tone = new THREE.Color().setRGB(...groundTone, THREE.LinearSRGBColorSpace);
-  const earthMat = new THREE.MeshStandardMaterial({
-    color: tone.clone().multiplyScalar(0.8),
-    roughness: 0.98,
-  });
-  const gravelMat = new THREE.MeshStandardMaterial({
-    color: tone.clone().lerp(new THREE.Color(0.58, 0.56, 0.52), 0.45),
-    roughness: 0.97,
-  });
-  const paintMat = new THREE.MeshStandardMaterial({ color: 0xe4e6e2, roughness: 0.85 });
-  const shedMat = new THREE.MeshStandardMaterial({ color: 0x8d9298, roughness: 0.75, metalness: 0.25 });
+  const towerMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88 });
+  const ruinMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 });
 
+  const dust = new THREE.Color().setRGB(...groundTone, THREE.LinearSRGBColorSpace);
+  const ash = new THREE.Color(0.30, 0.28, 0.25);
   const dummy = new THREE.Object3D();
 
-  if (houses.length > 0) {
-    const bodies = instanced(unitBox(), wallMat, houses.length);
-    const roofs = instanced(unitGable(), roofMat, houses.length);
+  const intact = all.filter((e) => e.h.state === 'intact');
+  const ruins = all.filter((e) => e.h.state === 'ruin');
+  const rubble = all.filter((e) => e.h.state === 'rubble');
 
-    houses.forEach((h, i) => {
-      dummy.position.set(h.x, h.y - 0.4, h.z); // sunk slightly so no gap on a slope
+  if (intact.length > 0) {
+    const bodies = instanced(unitBox(), wallMat, intact.length);
+    const roofs = instanced(unitGable(), roofMat, intact.length);
+    intact.forEach(({ h }, i) => {
+      dummy.position.set(h.x, h.y - 0.4, h.z);
       dummy.rotation.set(0, h.rotation, 0);
       dummy.scale.set(h.width, h.height + 0.4, h.depth);
       dummy.updateMatrix();
@@ -859,80 +976,80 @@ export function buildSettlementMeshes(groundTone: [number, number, number]): THR
       bodies.setColorAt(i, h.wall);
 
       dummy.position.set(h.x, h.y + h.height, h.z);
-      dummy.scale.set(h.width * 1.16, h.roofHeight, h.depth * 1.16);
+      const pitch = opts.flatRoofs && !h.church ? 0.35 : h.roofHeight;
+      const eave = opts.flatRoofs && !h.church ? 1.04 : 1.16;
+      dummy.scale.set(h.width * eave, pitch, h.depth * eave);
       dummy.updateMatrix();
       roofs.setMatrixAt(i, dummy.matrix);
-      roofs.setColorAt(i, h.roof);
+      roofs.setColorAt(i, opts.flatRoofs && !h.church ? h.wall.clone().multiplyScalar(0.92) : h.roof);
     });
     group.add(bodies, roofs);
+
+    const churches = intact.filter((e) => e.h.church && !opts.flatRoofs);
+    if (churches.length > 0) {
+      const towers = instanced(towerGeometry(), towerMat, churches.length);
+      churches.forEach(({ h }, i) => {
+        const back = h.depth / 2 + 2.6;
+        dummy.position.set(h.x - Math.sin(h.rotation) * back, h.y - 0.5, h.z - Math.cos(h.rotation) * back);
+        dummy.rotation.set(0, h.rotation, 0);
+        dummy.scale.set(1, 1, 1);
+        dummy.updateMatrix();
+        towers.setMatrixAt(i, dummy.matrix);
+      });
+      group.add(towers);
+    }
   }
 
-  if (strips.length > 0) {
-    const aprons = instanced(unitSlab(), earthMat, strips.length);
-    const runways = instanced(unitSlab(), gravelMat, strips.length);
-    const markers = instanced(unitBox(), paintMat, strips.length * markersPerStrip, false);
-    const sheds = instanced(unitBox(), shedMat, strips.length);
-
-    strips.forEach((s, i) => {
-      const yaw = Math.atan2(s.dirX, s.dirZ);
-
-      // Graded earth slightly larger than the runway hides the join where the
-      // pad meets the strip. Kept inside the pad's flat core, so it never lands
-      // on the shoulder where the terrain is already sloping away.
-      dummy.position.set(s.x, s.elevation + RUNWAY_TOP - 0.02, s.z);
-      dummy.rotation.set(0, yaw, 0);
-      dummy.scale.set(STRIP_HALF_WIDTH * 2 - 6, 6, RUNWAY_LENGTH + 60);
-      dummy.updateMatrix();
-      aprons.setMatrixAt(i, dummy.matrix);
-
-      dummy.position.set(s.x, s.elevation + RUNWAY_TOP, s.z);
-      dummy.scale.set(RUNWAY_WIDTH, 5, RUNWAY_LENGTH);
-      dummy.updateMatrix();
-      runways.setMatrixAt(i, dummy.matrix);
-
-      // Edge markers down both sides, plus a threshold bar at each end — what a
-      // gravel strip actually carries, and what makes it legible from the air.
-      let m = i * markersPerStrip;
-      const span = RUNWAY_LENGTH - 60;
-      for (let k = 0; k < MARKERS; k++) {
-        const t = -span / 2 + (span * k) / (MARKERS - 1);
-        for (const side of [-1, 1]) {
-          const off = side * (RUNWAY_WIDTH / 2 + 1.5);
-          dummy.position.set(
-            s.x + s.dirX * t + s.dirZ * off,
-            s.elevation + RUNWAY_TOP,
-            s.z + s.dirZ * t - s.dirX * off,
-          );
-          dummy.rotation.set(0, yaw, 0);
-          dummy.scale.set(1.6, 0.5, 3.4);
-          dummy.updateMatrix();
-          markers.setMatrixAt(m++, dummy.matrix);
-        }
-      }
-      for (const end of [-1, 1]) {
-        const t = (end * (RUNWAY_LENGTH / 2 - 22));
-        dummy.position.set(
-          s.x + s.dirX * t,
-          s.elevation + RUNWAY_TOP,
-          s.z + s.dirZ * t,
-        );
-        dummy.rotation.set(0, yaw, 0);
-        dummy.scale.set(RUNWAY_WIDTH - 8, 0.07, 2.4);
+  if (ruins.length > 0) {
+    const variants = [0, 1, 2].map((k) => ruins.filter((_, i) => i % 3 === k));
+    variants.forEach((list, k) => {
+      if (list.length === 0) return;
+      const mesh = instanced(ruinShell(k + 1), ruinMat, list.length);
+      list.forEach(({ h }, i) => {
+        dummy.position.set(h.x, h.y - 0.3, h.z);
+        dummy.rotation.set(0, h.rotation + (k === 1 ? Math.PI : 0), 0);
+        dummy.scale.set(h.width, h.height + (h.church ? 2 : 0.3), h.depth);
         dummy.updateMatrix();
-        markers.setMatrixAt(m++, dummy.matrix);
-      }
-
-      // A hangar off the side of the strip, aligned with it.
-      const offX = s.dirZ * (RUNWAY_WIDTH / 2 + 34);
-      const offZ = -s.dirX * (RUNWAY_WIDTH / 2 + 34);
-      dummy.position.set(s.x + offX, s.elevation, s.z + offZ);
-      dummy.rotation.set(0, yaw, 0);
-      dummy.scale.set(16, 8, 26);
-      dummy.updateMatrix();
-      sheds.setMatrixAt(i, dummy.matrix);
+        mesh.setMatrixAt(i, dummy.matrix);
+        // Scorched and dusted: the wall colour pushed toward ash and dirt.
+        const c = h.wall.clone().lerp(ash, 0.45).lerp(dust, 0.12).multiplyScalar(0.82);
+        mesh.setColorAt(i, c);
+      });
+      group.add(mesh);
     });
+    const stumps = ruins.filter((e) => e.h.church);
+    if (stumps.length > 0 && !opts.flatRoofs) {
+      const mesh = instanced(towerStump(), towerMat, stumps.length);
+      stumps.forEach(({ h }, i) => {
+        const back = h.depth / 2 + 2.6;
+        dummy.position.set(h.x - Math.sin(h.rotation) * back, h.y - 0.5, h.z - Math.cos(h.rotation) * back);
+        dummy.rotation.set(0, h.rotation, 0);
+        dummy.scale.set(1, 0.85 + cellRandom(Math.round(h.x), Math.round(h.z), 3) * 0.4, 1);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+      });
+      group.add(mesh);
+    }
+  }
 
-    group.add(aprons, runways, markers, sheds);
+  // Rubble: every flattened house, and a spill of it round each ruin.
+  const heaps = [...rubble, ...ruins.filter((_, i) => i % 2 === 0)];
+  if (heaps.length > 0) {
+    const mesh = instanced(rubbleMound(), ruinMat, heaps.length);
+    heaps.forEach(({ h }, i) => {
+      const spill = h.state === 'ruin';
+      const ox = spill ? (cellRandom(Math.round(h.x), Math.round(h.z), 8) - 0.5) * h.width : 0;
+      const oz = spill ? (cellRandom(Math.round(h.x), Math.round(h.z), 9) - 0.5) * h.depth : 0;
+      dummy.position.set(h.x + ox, h.y - 0.2, h.z + oz);
+      dummy.rotation.set(0, h.rotation + cellRandom(Math.round(h.x), Math.round(h.z), 10) * 6.28, 0);
+      const k = spill ? 0.55 : 1.15;
+      dummy.scale.set(h.width * k, (spill ? 2.2 : 3.4 + h.height * 0.2) * (h.church ? 1.4 : 1), h.depth * k);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+      const c = h.wall.clone().lerp(ash, 0.5).lerp(dust, 0.3).multiplyScalar(0.78);
+      mesh.setColorAt(i, c);
+    });
+    group.add(mesh);
   }
 
   return group;

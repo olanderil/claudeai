@@ -1,42 +1,96 @@
 import * as THREE from 'three';
 import { clamp, damp, smoothstep } from '../util/math';
-import type { Aircraft } from '../flight/Aircraft';
-import { CinematicDirector, type ShotTweak, type ShotSlot, type LandmarkTarget } from './Cinematic';
-import type { Telemetry } from '../flight/FlightModel';
+import {
+  CinematicDirector, clampElevation, dampDirection, slerpDirection,
+  type ShotTweak, type ShotSlot, type LandmarkTarget,
+} from './Cinematic';
+import type { CameraSubject, CameraTelemetry, CombatBody, CombatContext } from './Subject';
 
-export type CameraMode = 'chase' | 'cockpit' | 'orbit' | 'cinematic' | 'free' | 'director';
+export type { CameraSubject, CameraTelemetry, CombatBody, CombatContext } from './Subject';
+
+export type CameraMode = 'chase' | 'cockpit' | 'target' | 'orbit' | 'cinematic' | 'free' | 'director';
 
 /**
  * What the orbit sliders may ask for: metres, metres, and revolutions/minute.
  *
  * Exported so the bar's `min`/`max` and the rig's clamp are the same numbers.
+ * Sized for a scout eight and a half metres across: six metres is a wingtip's
+ * breadth off the airframe, a hundred and twenty is a machine small in a wide
+ * frame.
  */
 export const ORBIT_LIMITS = {
-  distance: [12, 160] as const,
-  height: [-20, 80] as const,
+  distance: [6, 120] as const,
+  height: [-15, 60] as const,
   rate: [0, 8] as const,
 };
 
 // Order matters twice over: it is the order of the picker in the Controls tab
-// and the order the camera key cycles through. Director sits directly after
-// Cinematic because it is the same view with the controls exposed, and Free is
-// last because it is the one that stops following the aeroplane at all.
+// and the order the camera key cycles through. The target view sits straight
+// after the cockpit because the two are the fighting views; Director sits
+// directly after Cinematic because it is the same view with the controls
+// exposed, and Free is last because it stops following the aeroplane at all.
 export const CAMERA_MODES: CameraMode[] =
-  ['chase', 'cockpit', 'orbit', 'cinematic', 'director', 'free'];
+  ['chase', 'cockpit', 'target', 'orbit', 'cinematic', 'director', 'free'];
 
 /** Least air an outside camera keeps between itself and the ground, metres. */
-const CAMERA_MIN_CLEARANCE = 3.0;
+const CAMERA_MIN_CLEARANCE = 2.0;
+
+/**
+ * Chase boom at the reference scale: up, and back, metres — and the point
+ * ahead of the nose it looks at. Back far enough for a scout to fill about
+ * half the width of the frame, which is what a jet at seventeen metres did.
+ */
+const CHASE_UP = 2.3;
+const CHASE_BACK = 10.5;
+const CHASE_LOOK_UP = 0.9;
+const CHASE_LOOK_AHEAD = 7;
+/** How quickly the boom swings round after the aircraft's attitude, 1/s. */
+const CHASE_SWING = 5;
+
+/**
+ * Target view at the reference scale: how far behind the player on the line
+ * from the target, and how far above that line. Sixteen degrees of elevation
+ * lifts the bandit clear of the top wing in the picture.
+ */
+const TARGET_BACK = 11;
+const TARGET_UP = 3.2;
+/** Most the target line is allowed to climb or dive, radians (70°). */
+const TARGET_MAX_ELEVATION = 1.22;
+/** How far from the player toward the target the aim sits, as a fraction of the angle. */
+const TARGET_AIM = 0.58;
+
+/** Cockpit near plane: the gunsight and windscreen are a hand's width away. */
+const COCKPIT_NEAR = 0.05;
+/** How far the pilot's head may turn and nod, radians. */
+const HEAD_YAW = 2.6;
+const HEAD_PITCH_DOWN = -0.55;
+const HEAD_PITCH_UP = 1.35;
 
 /**
  * Camera behaviour for each view.
  *
- * The chase camera is a critically-damped follow rather than a rigid mount: it
- * lags slightly under acceleration, which is what sells the sense of speed. Its
- * up-vector only partially follows the aircraft's roll — fully rolling with the
- * jet is disorienting, not rolling at all feels detached.
+ * The chase camera swings rather than lags. It used to trail the aircraft's
+ * *position* with a first-order follow, which at a jet's speed sat thirty
+ * metres behind the boom; at a scout's size even the seven metres that makes
+ * at fifty metres a second is most of the shot. Now the boom is rigid to the
+ * aeroplane and only its *attitude* is eased, so a hard turn swings the camera
+ * out and shows the bank, and a little speed-driven surge drops it back when
+ * the aeroplane accelerates. Its up-vector only partially follows the roll —
+ * fully rolling with the aircraft is disorienting, not rolling at all feels
+ * detached.
  */
 export class CameraRig {
   mode: CameraMode = 'chase';
+
+  /** Near plane used outside the cockpit, metres. */
+  defaultNear = 0.5;
+
+  /**
+   * Whether a kill takes the camera away from the outside player views (chase,
+   * target, orbit) for the kill cam. Off by default: in a dogfight the pilot's
+   * view is the pilot's. The cinematic view always shows kills.
+   */
+  killCamOutside = false;
 
   private readonly position = new THREE.Vector3();
   private readonly target = new THREE.Vector3();
@@ -47,28 +101,81 @@ export class CameraRig {
   private readonly _aircraftUp = new THREE.Vector3();
   private readonly _blendUp = new THREE.Vector3();
   private readonly _q = new THREE.Quaternion();
+  private readonly _q2 = new THREE.Quaternion();
   private readonly _shakeEuler = new THREE.Euler();
   private readonly _shakeQuat = new THREE.Quaternion();
   private readonly _flyby = new THREE.Vector3();
   private readonly _miss = new THREE.Vector3();
   private readonly _step = new THREE.Vector3();
+  private readonly _v1 = new THREE.Vector3();
+  private readonly _v2 = new THREE.Vector3();
+  private readonly _v3 = new THREE.Vector3();
+  private readonly _v4 = new THREE.Vector3();
+  private readonly _m = new THREE.Matrix4();
+
+  /** The aircraft the cameras are following. */
+  private subject: CameraSubject | null = null;
+  /** The fight as main.ts last described it. */
+  private readonly combat: CombatContext = { target: null, threat: null };
 
   private orbitAngle = 0;
   /**
    * What the orbit camera does, all four of it.
    *
-   * `distance` and `height` are metres at rest; the ring still widens with
-   * airspeed on top of `distance`, because a fixed radius that frames the
-   * aircraft on the runway whips past far too fast at 400 kt. `rate` is
-   * revolutions per minute and `direction` is +1 for clockwise seen from
-   * above, so flipping it is a sign and not a special case.
+   * `distance` and `height` are metres at rest; the ring still widens a little
+   * with airspeed on top of `distance`. `rate` is revolutions per minute and
+   * `direction` is +1 for clockwise seen from above.
    */
-  readonly orbit = { distance: 34, height: 9, rate: 2.1, direction: 1 };
-  private fov = 58;
+  readonly orbit = { distance: 16, height: 4, rate: 2.5, direction: 1 };
+  /** Eased orbit offset from the aircraft — the ring, not the world position, is smoothed. */
+  private readonly orbitOffset = new THREE.Vector3();
+  private fov = 60;
   /** Field of view before the speed-driven widening, degrees. */
-  private baseFov = 58;
-  private shake = 0;
+  private baseFov = 60;
   private initialised = false;
+
+  // ---------------------------------------------------------------- shake
+  /** Smooth low-frequency shake — buffet, hits, ground rush. Damped. */
+  private rumble = 0;
+  /** High-frequency buzz — the engine and the guns. Damped. */
+  private buzz = 0;
+  /** Impulses from `addShake`, decaying. */
+  private impulse = 0;
+  private shakeClock = 0;
+  /** Engine power 0..1 from main.ts, or null to guess from the telemetry. */
+  private enginePower: number | null = null;
+  private engineRotary = true;
+  private gunfire = false;
+
+  // ---------------------------------------------------------------- chase
+  /** Eased copy of the aircraft's attitude, for the chase boom's swing. */
+  private readonly chaseQuat = new THREE.Quaternion();
+  /** Slow copy of the airspeed; the difference is the surge. */
+  private chaseTas = 0;
+
+  // -------------------------------------------------------------- cockpit
+  private readonly cockpitQuat = new THREE.Quaternion();
+  private headYaw = 0;
+  private headPitch = 0;
+  private lookYaw = 0;
+  private lookPitch = 0;
+  private padlock = false;
+
+  // --------------------------------------------------------------- target
+  /** Damped direction from the player toward the target. */
+  private readonly tgtDir = new THREE.Vector3(0, 0, -1);
+  /** Damped camera up for the target view. */
+  private readonly tgtUp = new THREE.Vector3(0, 1, 0);
+  /** Where the target was last seen, for easing back out to the chase. */
+  private readonly tgtLast = new THREE.Vector3();
+  private tgtKnown = false;
+  /** 0 is the chase view, 1 is the target view; eased between. */
+  private tgtBlend = 0;
+  /** Field of view the target view needed to hold both, eased. */
+  private tgtFit = 0;
+
+  /** Kill cam playing in an outside view, so the view knows to snap back after. */
+  private killOutside = false;
 
   private readonly director = new CinematicDirector();
 
@@ -86,8 +193,7 @@ export class CameraRig {
   void {
     // NaN survives a plain clamp — every comparison against it is false — and a
     // NaN radius puts the camera at no position at all, which renders as a
-    // black frame that nothing on the bar can recover from. A corrupt save file
-    // is enough to get one here, so it is turned away at the door.
+    // black frame that nothing on the bar can recover from.
     const set = (v: number | undefined, [lo, hi]: readonly [number, number], now: number) =>
       (v === undefined || !Number.isFinite(v) ? now : Math.min(hi, Math.max(lo, v)));
     this.orbit.distance = set(next.distance, ORBIT_LIMITS.distance, this.orbit.distance);
@@ -100,9 +206,7 @@ export class CameraRig {
 
   /** Name of the running setup, or null in the views the director does not drive. */
   get shotName(): string | null {
-    return this.mode === 'cinematic' || this.mode === 'director'
-      ? this.director.shotName
-      : null;
+    return this.directing() ? this.director.shotName : null;
   }
 
   cycle(): CameraMode {
@@ -110,18 +214,14 @@ export class CameraRig {
     this.mode = CAMERA_MODES[(i + 1) % CAMERA_MODES.length];
     this.initialised = false;
     this.handBack();
+    this.director.cancelKill();
     this.director.reset();
     return this.mode;
   }
 
   /**
-   * Leaving the director gives the camera back to the sequence.
-   *
-   * The pin and the reel are the director's controls, and `reset` never cleared
-   * them — so a pin (which opening the sliders applies *for* you) followed by a
-   * switch to the cinematic view left that view holding one setup and, with
-   * looping on, replaying it forever. The cinematic camera is the hands-off
-   * one; it must never come up pinned.
+   * Leaving the director gives the camera back to the sequence. The cinematic
+   * camera is the hands-off one; it must never come up pinned.
    */
   private handBack(): void {
     if (this.mode === 'director') return;
@@ -130,13 +230,53 @@ export class CameraRig {
   }
 
   /**
-   * Drop the smoothing for one frame. Needed whenever the aircraft is moved
-   * discontinuously (reset, respawn) — otherwise the camera spends several
-   * seconds flying across the map to catch up.
+   * Drop every bit of smoothing and tracking, for one frame.
+   *
+   * Needed whenever the aircraft is moved discontinuously (reset, respawn,
+   * another subject) — otherwise the camera spends seconds flying across the
+   * map to catch up, a planted free camera watches the spot the aeroplane left,
+   * and the target view swings in from wherever the last bandit was.
    */
   snap(): void {
     this.initialised = false;
+    this.director.cancelKill();
     this.director.reset();
+    this.killOutside = false;
+    this.freeTrackKnown = false;
+    this.freeTrack.set(0, 0, 0);
+    this.freeAnchored = false;
+    this.freeReshape = false;
+    this.freeSpinAz = 0;
+    this.freeSpinEl = 0;
+    this.freeYawKnown = false;
+    this.tgtKnown = false;
+    this.tgtFit = 0;
+    this.rumble = 0;
+    this.buzz = 0;
+    this.impulse = 0;
+    this.headYaw = this.lookYaw;
+    this.headPitch = this.lookPitch;
+  }
+
+  /**
+   * Follow a different aircraft.
+   *
+   * The old one gets its cockpit hidden again — it may be flying on as an AI
+   * machine, and an interior drawn through its fuselage would be visible from
+   * everywhere — and everything is snapped, because a new subject is a cut.
+   * `update` calls this itself when handed a different subject, so this is
+   * only needed to switch ahead of the next frame.
+   */
+  setSubject(subject: CameraSubject | null): void {
+    if (subject === this.subject) return;
+    if (this.subject !== null) this.subject.setCockpitVisible(false);
+    this.subject = subject;
+    this.snap();
+  }
+
+  /** The aircraft currently followed, if any. */
+  get currentSubject(): CameraSubject | null {
+    return this.subject;
   }
 
   setMode(mode: CameraMode): void {
@@ -144,6 +284,7 @@ export class CameraRig {
     this.mode = mode;
     this.initialised = false;
     this.handBack();
+    this.director.cancelKill();
     this.director.reset();
   }
 
@@ -165,6 +306,17 @@ export class CameraRig {
     this.director.setContext(sun, landmark, structure, agl);
   }
 
+  /**
+   * The fight: the enemy being fought or locked, and the most dangerous one on
+   * the player's tail. Call every frame (or whenever either changes); the
+   * vectors are held by reference and read afresh each frame.
+   */
+  setCombatContext(ctx: CombatContext): void {
+    this.combat.target = ctx.target;
+    this.combat.threat = ctx.threat;
+    this.director.setCombat(this.combat);
+  }
+
   /** Whether a landmark tripod has anything to stand on — see the shot picker. */
   landmarkTripodReady(): boolean {
     return this.director.tripodReady();
@@ -176,80 +328,45 @@ export class CameraRig {
     return this.director.force(name);
   }
 
+  // ------------------------------------------------------------- the free camera
   /**
    * Free camera state: where you have dragged it to.
    *
    * Spherical, around the aircraft, in the aircraft's *yaw* frame — so the
    * aeroplane holds its place in the frame and the world turns underneath it.
-   * That is the aircraft lock, and it is what this always does.
-   *
-   * The world lock takes the station this describes, plants a camera there, and
-   * leaves it: see `freeAnchor`.
+   * The distance is in reference-scout units: a bomber is framed as a scout is.
    */
   private freeAzimuth = Math.PI; // behind
-  private freeElevation = 0.22;
-  private freeDistance = 26;
+  private freeElevation = 0.2;
+  private freeDistance = 14;
   /** Aim offset from the aircraft, metres, from a shift-drag. */
   private readonly freeAim = new THREE.Vector3();
   private freeWorldLocked = false;
   /**
-   * Where a world-locked camera is standing.
-   *
-   * The world lock used to hold only a *bearing*, and keep travelling with the
-   * aircraft. That made it very nearly invisible: the camera still followed the
-   * aeroplane everywhere, so the aircraft never moved in frame, never got
-   * closer or further, and never went past. The only cue was which way it was
-   * facing, and then only mid-turn — in level flight the two locks were the
-   * same picture.
-   *
-   * This holds a *place* instead, and the place is chosen *ahead* of the
-   * aircraft: the aeroplane flies at the lens, whips past it, and shrinks away
-   * behind. Planting where the aircraft already is would only ever give the
-   * second half of that, which is the dull half.
+   * Where a world-locked camera is standing: a *place*, chosen *ahead* of the
+   * aircraft, so the aeroplane flies at the lens, whips past it, and shrinks
+   * away behind.
    */
   private readonly freeAnchor = new THREE.Vector3();
   private freeAnchored = false;
   /**
-   * A drag or a wheel has asked for a different angle on the shot in progress.
-   *
-   * Distinct from unplanting. Reaching for the framing used to drop the anchor
-   * outright, which took fresh station a full lead up the road — so every
-   * attempt to adjust the angle threw away the shot and started the approach
-   * again from a kilometre out. Reframing is not "give me another shot": it is
-   * "same shot, seen from over here".
+   * A drag or a wheel has asked for a different angle on the shot in progress
+   * — "same shot, seen from over here", not "give me another shot".
    */
   private freeReshape = false;
   /**
    * Which way the aircraft is actually going, as a direction — not where its
-   * nose points, and deliberately not a speed.
-   *
-   * A fly-by has to be planted on the path the aeroplane will fly. Using the
-   * nose instead looks identical in level cruise and falls apart the moment it
-   * is doing anything: under power it sits nose-high and climbs, so a camera
-   * planted along the nose ends up above and ahead of a track that goes
-   * somewhere else, and the aircraft crawls towards it without ever arriving.
-   *
-   * Only the direction is taken from here. Dividing the step by `dt` to get a
-   * speed as well looks obvious and is wrong: the aircraft advances in
-   * simulated time, in whole physics steps the loop may not have had room to
-   * finish, while `dt` is the real frame. The two agree at a healthy frame rate
-   * and diverge badly at a poor one, and the resulting speed — five times over,
-   * in a slow frame — went straight into the lead, planting the camera a mile
-   * and a half up the road. `tas` already carries the speed, correctly.
+   * nose points, and deliberately not a speed. A fly-by has to be planted on
+   * the path the aeroplane will fly, and `tas` already carries the speed.
    */
   private readonly freeTrack = new THREE.Vector3();
   private readonly freeLastPos = new THREE.Vector3();
   private freeTrackKnown = false;
-  /**
-   * Whether a plain drag reframes instead of orbiting.
-   *
-   * Shift-drag has always done this; the toggle exists because reframing is a
-   * two-handed gesture you hold for a while, and because a modifier leaves no
-   * trace on screen of what the mouse is currently going to do.
-   */
+  /** Whether a plain drag reframes instead of orbiting. */
   private freeReframe = false;
   /** Damped copy of the aircraft's heading, so gusts do not reach the frame. */
   private freeYaw = 0;
+  private freeYawKnown = false;
   /** Velocity carried between frames, so the drag has some weight. */
   private freeSpinAz = 0;
   private freeSpinEl = 0;
@@ -258,68 +375,50 @@ export class CameraRig {
    * Apply a mouse gesture to the free camera. Ignored in the other modes.
    *
    * The drag moves the camera *directly*, one pixel to a fixed angle, and only
-   * leaves a little residual spin behind for the flick. Feeding the drag in as
-   * a decaying rate — which is what this did — has a nasty property: a slow,
-   * steady drag, which is exactly what you do when framing something, has each
-   * frame's contribution eaten by the decay before the next arrives, so the
-   * camera barely moves. The range was always a full circle; it just would not
-   * go there at any speed you would naturally use.
+   * leaves a little residual spin behind for the flick.
    */
   moveFreeCamera(dx: number, dy: number, wheel: number, pan: boolean): void {
     if (this.mode !== 'free') return;
     // The render loop calls this every frame whether or not the mouse moved, so
-    // an empty gesture has to be nothing at all. Taking the early return out
-    // makes a world-locked camera re-plant on every frame, which is precisely
-    // the aircraft lock wearing the other lock's label.
+    // an empty gesture has to be nothing at all.
     if (dx === 0 && dy === 0 && wheel === 0) return;
-    // Reaching for the framing means you want it applied now, not to a station
-    // the camera left behind ten seconds ago — but for a planted camera that
-    // means moving where it stands, not restarting the fly-by.
     if (this.freeWorldLocked) this.freeReshape = true;
     else this.freeAnchored = false;
     if (pan || this.freeReframe) {
       // Shift-drag nudges what the camera is *looking at* rather than where it
       // is, which is how you put the aircraft off-centre deliberately.
-      this.freeAim.x = clamp(this.freeAim.x + dx * 0.05, -60, 60);
-      this.freeAim.y = clamp(this.freeAim.y - dy * 0.05, -40, 40);
+      this.freeAim.x = clamp(this.freeAim.x + dx * 0.025, -30, 30);
+      this.freeAim.y = clamp(this.freeAim.y - dy * 0.025, -20, 20);
     } else {
       this.freeAzimuth += dx * ORBIT_PER_PIXEL;
-      // Drag *up*, camera goes up and over the subject — the convention every
-      // 3D tool uses. Taking the raw sign sends it under the aeroplane instead.
+      // Drag *up*, camera goes up and over the subject.
       this.freeElevation = clamp(this.freeElevation - dy * ORBIT_PER_PIXEL * 0.8, -1.35, 1.35);
-      // What is left over carries the movement on for a moment after release.
       this.freeSpinAz += dx * ORBIT_PER_PIXEL * 0.10;
       this.freeSpinEl -= dy * ORBIT_PER_PIXEL * 0.08;
     }
     if (wheel !== 0) {
       // Multiplicative, so a click of the wheel moves the same *proportion* at
-      // six metres and at six hundred.
-      this.freeDistance = clamp(this.freeDistance * Math.exp(wheel * 0.0011), 6, 900);
+      // four metres and at four hundred.
+      this.freeDistance = clamp(this.freeDistance * Math.exp(wheel * 0.0011), 3.5, 600);
     }
   }
 
   /**
-   * Nine saved viewpoints, on the number keys.
-   *
-   * They start as nine that are worth having, and any of them can be
-   * overwritten with whatever you have framed. That is nicer than a separate
-   * set of "presets" and "saves": the defaults are simply the first thing in
-   * each slot.
+   * Nine saved viewpoints, on the number keys. They start as nine that are
+   * worth having, and any of them can be overwritten.
    */
   private readonly views: FreeView[] = [
-    // A spread of distance and height rather than nine variations on "behind".
-    /* 1 astern    */ { azimuth: Math.PI, elevation: 0.16, distance: 26, aimX: 0, aimY: 0, worldLocked: false },
-    /* 2 abeam     */ { azimuth: Math.PI / 2, elevation: 0.08, distance: 30, aimX: 0, aimY: 0, worldLocked: false },
-    /* 3 nose-on   */ { azimuth: 0, elevation: 0.14, distance: 34, aimX: 0, aimY: 0, worldLocked: false },
-    /* 4 overhead  */ { azimuth: Math.PI, elevation: 1.20, distance: 55, aimX: 0, aimY: 0, worldLocked: false },
-    /* 5 low six   */ { azimuth: Math.PI, elevation: -0.38, distance: 22, aimX: 0, aimY: 0, worldLocked: false },
-    /* 6 high wide */ { azimuth: Math.PI * 0.72, elevation: 0.50, distance: 130, aimX: 0, aimY: 0, worldLocked: false },
-    /* 7 wingtip   */ { azimuth: Math.PI * 0.58, elevation: 0.02, distance: 12, aimX: 0, aimY: 0, worldLocked: false },
-    /* 8 long lens */ { azimuth: Math.PI * 1.28, elevation: 0.22, distance: 320, aimX: 0, aimY: 0, worldLocked: false },
-    // The one world-locked default. Nothing else in the list shows what that
-    // lock does, and from here the next turn the aircraft makes swings it right
-    // through the frame — which is the whole point of the setting.
-    /* 9 fly-by    */ { azimuth: Math.PI * 0.5, elevation: 0.05, distance: 70, aimX: 0, aimY: 0, worldLocked: true },
+    /* 1 astern    */ { azimuth: Math.PI, elevation: 0.16, distance: 14, aimX: 0, aimY: 0, worldLocked: false },
+    /* 2 abeam     */ { azimuth: Math.PI / 2, elevation: 0.08, distance: 16, aimX: 0, aimY: 0, worldLocked: false },
+    /* 3 nose-on   */ { azimuth: 0, elevation: 0.14, distance: 17, aimX: 0, aimY: 0, worldLocked: false },
+    /* 4 overhead  */ { azimuth: Math.PI, elevation: 1.20, distance: 28, aimX: 0, aimY: 0, worldLocked: false },
+    /* 5 low six   */ { azimuth: Math.PI, elevation: -0.38, distance: 12, aimX: 0, aimY: 0, worldLocked: false },
+    /* 6 high wide */ { azimuth: Math.PI * 0.72, elevation: 0.50, distance: 65, aimX: 0, aimY: 0, worldLocked: false },
+    /* 7 wingtip   */ { azimuth: Math.PI * 0.58, elevation: 0.05, distance: 7, aimX: 0, aimY: 0, worldLocked: false },
+    /* 8 long lens */ { azimuth: Math.PI * 1.28, elevation: 0.22, distance: 160, aimX: 0, aimY: 0, worldLocked: false },
+    // The one world-locked default: from here the next turn the aircraft makes
+    // swings it right through the frame.
+    /* 9 fly-by    */ { azimuth: Math.PI * 0.5, elevation: 0.05, distance: 36, aimX: 0, aimY: 0, worldLocked: true },
   ];
 
   /** How many view slots there are — the bar builds its buttons from this. */
@@ -370,28 +469,16 @@ export class CameraRig {
   /**
    * Apply a mouse gesture to the orbit camera. Ignored in the other modes.
    *
-   * The same two gestures the free camera uses, minus the one this view owns:
-   * dragging up and down raises and lowers the ring, the wheel opens it out and
-   * pulls it in, and horizontal drag does nothing at all. Bearing is what the
-   * orbit *is* — it sweeps on its own, at a rate the bar sets — so a sideways
-   * drag could only fight the thing you came here to watch.
-   *
-   * Returns whether anything moved, so the caller knows when the bar's readouts
-   * need redrawing and when the settings are worth writing out.
+   * Dragging up and down raises and lowers the ring, the wheel opens it out and
+   * pulls it in, and horizontal drag does nothing at all: bearing is what the
+   * orbit *is*. Returns whether anything moved.
    */
   moveOrbitCamera(dy: number, wheel: number): boolean {
     if (this.mode !== 'orbit' || (dy === 0 && wheel === 0)) return false;
     if (dy !== 0) {
-      // Drag up, camera rises — the same sign as the free camera's elevation,
-      // and as every other 3D tool. A flat rate rather than one scaled by the
-      // radius: this is a distance in metres, the bar states it in metres, and
-      // a drag that covered eight metres near the aircraft and eighty out wide
-      // would make the readout look broken.
       this.setOrbit({ height: this.orbit.height - dy * ORBIT_HEIGHT_PER_PIXEL });
     }
     if (wheel !== 0) {
-      // Multiplicative, so a click of the wheel moves the same *proportion* at
-      // twelve metres and at a hundred and sixty.
       this.setOrbit({ distance: this.orbit.distance * Math.exp(wheel * 0.0011) });
     }
     return true;
@@ -423,9 +510,107 @@ export class CameraRig {
     return this.freeReframe;
   }
 
-  /** Cut to a shot suited to something that just happened. */
+  // ------------------------------------------------------------- the fight
+
+  /**
+   * Cut to a shot suited to something that just happened.
+   *
+   * 'takeoff' and 'landing' as before; 'engage' when a fight opens (a bandit
+   * locked, or coming into reach); 'hit' when the player is taking hits;
+   * 'flak' when archie is bursting round the player. 'kill' plays the kill cam
+   * on the current target, if there is one — `requestKillCam` is the better
+   * call when the victim is known for certain.
+   */
   requestShot(event: string): void {
+    if (event === 'kill') {
+      const tg = this.combat.target;
+      if (tg !== null) this.requestKillCam(tg, 3);
+      return;
+    }
     this.director.request(event);
+  }
+
+  /**
+   * An enemy has gone down: follow it for `seconds` and hand back.
+   *
+   * Plays in the cinematic view, and in the director unless a shot is pinned
+   * or a reel is running (the operator is composing). With `killCamOutside` on
+   * it also takes over the chase, target and orbit views for its length.
+   * Returns whether a kill cam will play.
+   *
+   * The victim is held by reference, so hand over something whose position
+   * keeps moving — the dying aircraft itself, or its render root.
+   */
+  requestKillCam(victim: CombatBody | CameraSubject, seconds = 3): boolean {
+    const body: CombatBody = 'root' in victim
+      ? {
+        position: victim.root.position,
+        quaternion: victim.root.quaternion,
+        velocity: victim.velocity,
+        cameraScale: victim.cameraScale,
+      }
+      : victim;
+    const directing = this.mode === 'cinematic'
+      || (this.mode === 'director' && !this.director.isPinned && !this.reelOn);
+    const outside = this.killCamOutside
+      && (this.mode === 'chase' || this.mode === 'target' || this.mode === 'orbit');
+    if (!directing && !outside) return false;
+    return this.director.killCam(body, seconds);
+  }
+
+  /** Whether a kill cam is on screen (or about to be). */
+  get killCamActive(): boolean {
+    return this.director.killActive && (this.directing() || this.killOutside);
+  }
+
+  /**
+   * A jolt: a hit taken, a shell bursting close, a heavy landing. Adds to
+   * whatever is already shaking and dies away over a second or so. 1 is a
+   * solid hit; 0.3 a near burst.
+   */
+  addShake(amount: number): void {
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    this.impulse = Math.min(this.impulse + amount, 2.5);
+  }
+
+  /** The player's guns are firing: the Vickers hammer the airframe. */
+  setGunfire(on: boolean): void {
+    this.gunfire = on;
+  }
+
+  /**
+   * How hard the engine is running, 0..1, and whether it is a rotary — the
+   * whole crankcase spinning on the crankshaft, which shakes a scout like
+   * nothing else. Until this is called the rig guesses from the telemetry.
+   */
+  setEngine(power: number, rotary = this.engineRotary): void {
+    this.enginePower = Number.isFinite(power) ? clamp(power, 0, 1) : null;
+    this.engineRotary = rotary;
+  }
+
+  /**
+   * Where the pilot is looking, relative to the nose, radians: positive yaw is
+   * to the right, positive pitch up. Held until changed, and eased — map a
+   * mouse or a hat to it. Looking far round (past ±90°) leans the head out to
+   * see past the fuselage, as a pilot checking his six does.
+   */
+  setCockpitLook(yaw: number, pitch: number): void {
+    this.lookYaw = Number.isFinite(yaw) ? clamp(yaw, -HEAD_YAW, HEAD_YAW) : 0;
+    this.lookPitch = Number.isFinite(pitch) ? clamp(pitch, HEAD_PITCH_DOWN, HEAD_PITCH_UP) : 0;
+  }
+
+  /** Where the pilot's head is actually pointing now, radians. */
+  get cockpitLook(): { yaw: number; pitch: number } {
+    return { yaw: this.headYaw, pitch: this.headPitch };
+  }
+
+  /**
+   * Padlock: in the cockpit, keep the head turned toward the target (as far as
+   * a neck allows) instead of where `setCockpitLook` says. Typically held on a
+   * key.
+   */
+  setCockpitPadlock(on: boolean): void {
+    this.padlock = on;
   }
 
   // ------------------------------------------------------------- hybrid mode
@@ -438,9 +623,7 @@ export class CameraRig {
 
   /** Cut straight to the next or previous setup. */
   stepShot(direction: 1 | -1): void {
-    // Anything that picks a shot by hand takes the reel off the air — the reel
-    // is a running order, and a running order somebody keeps overriding is not
-    // one. Same reasoning as recalling a slot.
+    // Anything that picks a shot by hand takes the reel off the air.
     if (this.reelOn) this.stopReel();
     this.director.step(direction);
   }
@@ -465,7 +648,6 @@ export class CameraRig {
     this.director.replay();
   }
 
-  /** Whether a held shot repeats its move or freezes on its last frame. */
   /** Whether every shot is played back to front. */
   get shotReversed(): boolean {
     return this.director.reversingAll;
@@ -475,6 +657,7 @@ export class CameraRig {
     this.director.setReverseAll(on);
   }
 
+  /** Whether a held shot repeats its move or freezes on its last frame. */
   get shotLoops(): boolean {
     return this.director.loops;
   }
@@ -536,18 +719,15 @@ export class CameraRig {
 
   // ---------------------------------------------------------- saved setups
   //
-  // Eight of them on the number keys, exactly as the free camera has eight
-  // saved views: the number keys mean "my saved views" in whichever of the two
-  // modes you are in, which is one rule to learn rather than two.
+  // Nine of them on the number keys, exactly as the free camera has nine saved
+  // views: the number keys mean "my saved views" in whichever of the two modes
+  // you are in.
   private readonly slots: (ShotSlot | null)[] =
     [null, null, null, null, null, null, null, null, null];
 
   /**
-   * The reel: which slots play, and in what order.
-   *
-   * Empty means "every filled slot, in slot order", so a reel works the moment
-   * there is something to play without anyone having to compose one first.
-   * Ordering it is then an edit of this array.
+   * The reel: which slots play, and in what order. Empty means "every filled
+   * slot, in slot order".
    */
   private order: number[] = [];
   private reelOn = false;
@@ -560,18 +740,10 @@ export class CameraRig {
     return true;
   }
 
-  /**
-   * Cut to a saved setup and hold it.
-   *
-   * Holding is the point: a slot is something you saved because you wanted to
-   * look at it, and a sequence that cut away four seconds later would make the
-   * key useless. The auto/pinned button is the way back to the sequence.
-   */
+  /** Cut to a saved setup and hold it. */
   recallShotSlot(index: number): ShotSlot | null {
     const slot = this.slots[index] ?? null;
     if (slot === null) return null;
-    // Choosing a shot by hand stops the reel: two things cannot both be
-    // deciding what is on screen.
     if (this.reelOn) this.stopReel();
     this.director.setTweak(slot.shot, slot.tweak);
     if (!this.director.force(slot.shot)) return null;
@@ -641,120 +813,356 @@ export class CameraRig {
 
   /** Aperture and focus plane the current cinematic shot asks for. */
   get lens(): { aperture: number; focusScale: number } {
-    return this.mode === 'cinematic' || this.mode === 'director'
+    return this.directing()
       ? { aperture: this.director.aperture, focusScale: this.director.focusScale }
       : { aperture: 0, focusScale: 1 };
   }
 
-  update(dt: number, aircraft: Aircraft, t: Telemetry): void {
-    const pos = aircraft.root.position;
-    const quat = aircraft.root.quaternion;
-    aircraft.setCockpitVisible(this.mode === 'cockpit');
+  /**
+   * What the lens should be focused on: the subject of the shot on screen —
+   * the player, or the enemy in a shot of the enemy, or a kill cam's victim.
+   * Measure the focus distance to this rather than to the player.
+   */
+  get focusPoint(): THREE.Vector3 {
+    if (this.directing()) return this.director.focusPoint;
+    return this.subject?.root.position ?? this.director.focusPoint;
+  }
+
+  /** Whether the director is driving the camera this frame. */
+  private directing(): boolean {
+    return this.mode === 'cinematic' || this.mode === 'director' || this.killOutside;
+  }
+
+  update(dt: number, subject: CameraSubject, t: CameraTelemetry): void {
+    if (subject !== this.subject) this.setSubject(subject);
+    const pos = subject.root.position;
+    const quat = subject.root.quaternion;
+    const s = scaleOf(subject.cameraScale);
+    this.shakeClock += dt;
+    this.impulse *= Math.exp(-3.2 * dt);
+
+    // A kill cam in an outside view takes the camera for its length and hands
+    // it back with a snap, so the chase does not ease in from the kill cam.
+    const outsideMode = this.mode === 'chase' || this.mode === 'target' || this.mode === 'orbit';
+    const killOutside = this.killCamOutside && outsideMode && this.director.killActive;
+    if (this.killOutside && !killOutside) this.initialised = false;
+    this.killOutside = killOutside;
+
+    const directing = this.directing();
+    subject.setCockpitVisible(this.mode === 'cockpit'
+      || (directing && this.director.wantsInterior));
 
     // The director owns the whole camera in this mode — position, aim and focal
     // length — so none of the shared framing below applies to it.
-    if (this.mode === 'cinematic' || this.mode === 'director') {
-      this.director.update(dt, pos, quat, t, this.camera, this.groundHeight);
-      this.shake = damp(this.shake, t.stalled ? 0.35 : 0, 6, dt);
+    if (directing) {
+      this.director.update(dt, pos, quat, t, this.camera, this.groundHeight,
+        { scale: s, eye: subject.eyePoint, velocity: subject.velocity });
+      this.camera.near = this.director.nearPlane ?? this.defaultNear;
+      this.camera.updateProjectionMatrix();
+      // Shake belongs to the player's aircraft. A shot of the enemy does not
+      // tremble because the player's engine does, and only a camera bolted to
+      // the airframe feels the engine and the guns at all.
+      const own = this.director.subjectRole === 'player';
+      const rumble = (own && t.stalled === true ? 0.35 : 0) + this.impulse * 0.5;
+      const buzz = this.director.mounted ? this.engineBuzz(t, 0.16) + (this.gunfire ? 0.4 : 0) : 0;
+      this.rumble = damp(this.rumble, rumble, 6, dt);
+      this.buzz = damp(this.buzz, buzz, 10, dt);
       this.applyShake();
-      this.initialised = true;
+      // Not while a kill cam borrows an outside view: that view has to snap
+      // back when it ends, not ease in from wherever the kill cam was.
+      this.initialised = !this.killOutside;
       return;
     }
 
     // Speed drives FOV and a touch of shake — the cheap, reliable speed cues.
-    const speedFactor = clamp(t.tas / 400, 0, 1.4);
+    // Sixty metres a second is a scout going well; a dive runs past it.
+    const speedFactor = clamp(t.tas / 60, 0, 1.4);
     const targetFov =
       this.mode === 'cockpit'
-        // Narrower than the outside views, not wider. A wide angle from the eye
-        // point shrinks the canopy frame into the middle of the screen, which is
-        // the opposite of sitting inside it.
-        ? this.baseFov - 5 + speedFactor * 6
-        : this.baseFov - 2 + speedFactor * 14 + t.afterburner * 4;
-    this.fov = damp(this.fov, targetFov, 3, dt);
+        // A little wider than the outside views: the cockpit is open, and the
+        // wider lens puts the wings and the struts at the edge of vision where
+        // a pilot actually sees them.
+        ? this.baseFov + 6 + speedFactor * 3
+        : this.baseFov - 4 + speedFactor * 9;
+    this.fov = this.initialised ? damp(this.fov, targetFov, 3, dt) : targetFov;
 
-    // Speed shake belongs to the views that are *riding* the aircraft. The free
+    // Shake belongs to the views that are *riding* the aircraft. The free
     // camera is one you are holding and aiming, and a hand-framed shot that
-    // trembles reads as a fault rather than as speed — the cinematic director
-    // opts out of it for the same reason.
-    const buffet = t.stalled ? 0.7 : 0;
-    const groundRush = smoothstep(260, 60, t.agl) * speedFactor * 0.35;
-    const wanted = this.mode === 'free' ? 0 : buffet + groundRush + t.afterburner * 0.12;
-    this.shake = damp(this.shake, wanted, 6, dt);
+    // trembles reads as a fault rather than as speed.
+    const riding = this.mode === 'chase' || this.mode === 'cockpit' || this.mode === 'target';
+    const buffet = t.stalled === true ? 0.7 : 0;
+    const groundRush = smoothstep(60, 12, t.agl) * speedFactor * 0.3;
+    const rumble = this.mode === 'free' ? 0
+      : riding ? buffet + groundRush + this.impulse
+        : this.impulse * 0.5;
+    const buzz = !riding ? 0
+      : this.mode === 'cockpit'
+        ? this.engineBuzz(t, 0.22) + (this.gunfire ? 0.45 : 0)
+        : this.engineBuzz(t, 0.1) + (this.gunfire ? 0.28 : 0);
+    this.rumble = this.initialised ? damp(this.rumble, rumble, 6, dt) : rumble;
+    this.buzz = this.initialised ? damp(this.buzz, buzz, 10, dt) : buzz;
 
+    let near = this.defaultNear;
     switch (this.mode) {
       case 'chase':
-        this.updateChase(dt, pos, quat);
+        this.updateChase(dt, pos, quat, t, s);
         break;
       case 'cockpit':
-        this.updateCockpit(dt, aircraft, pos, quat);
+        near = COCKPIT_NEAR;
+        this.updateCockpit(dt, subject, pos, quat);
+        break;
+      case 'target':
+        this.updateTarget(dt, pos, quat, t, s);
         break;
       case 'orbit':
-        this.updateOrbit(dt, pos, t);
+        this.updateOrbit(dt, pos, t, s);
         break;
       case 'free':
-        this.updateFree(dt, pos, quat, t);
+        this.updateFree(dt, pos, quat, t, s, subject.velocity);
         break;
     }
 
-    this.camera.fov = this.fov;
+    this.camera.near = near;
+    this.camera.fov = this.mode === 'target' ? Math.max(this.fov, this.tgtFit) : this.fov;
     this.camera.updateProjectionMatrix();
     this.applyShake();
     this.initialised = true;
   }
 
-  private updateChase(dt: number, pos: THREE.Vector3, quat: THREE.Quaternion): void {
-    this._desired.set(0, 4.0, 17.5).applyQuaternion(quat).add(pos);
-    this._lookAt.set(0, 1.0, -10).applyQuaternion(quat).add(pos);
-    this.liftAboveGround(this._desired);
+  /** Engine vibration for this view, before the damping. */
+  private engineBuzz(t: CameraTelemetry, full: number): number {
+    const guess = t.onGround === true && t.tas < 1 ? 0.35 : 0.75;
+    const power = this.enginePower ?? guess;
+    return full * power * (this.engineRotary ? 1 : 0.55);
+  }
 
+  /** Where the chase boom puts the camera, and what it aims at. */
+  private chasePose(pos: THREE.Vector3, t: CameraTelemetry, s: number,
+    outPos: THREE.Vector3, outLook: THREE.Vector3): void {
+    // Accelerating, the camera drops back a touch; slowing, it closes up.
+    const surge = clamp((t.tas - this.chaseTas) * 0.12, -1.2, 2.0);
+    outPos.set(0, CHASE_UP * s, (CHASE_BACK + surge) * s).applyQuaternion(this.chaseQuat).add(pos);
+    outLook.set(0, CHASE_LOOK_UP * s, -CHASE_LOOK_AHEAD * s).applyQuaternion(this.chaseQuat).add(pos);
+    this.liftAboveGround(outPos);
+  }
+
+  /** Ease the chase boom's attitude and surge toward the aircraft's. */
+  private swingChase(dt: number, quat: THREE.Quaternion, t: CameraTelemetry): void {
     if (!this.initialised) {
-      this.position.copy(this._desired);
-      this.target.copy(this._lookAt);
+      this.chaseQuat.copy(quat);
+      this.chaseTas = t.tas;
     } else {
-      const k = 1 - Math.exp(-7 * dt);
-      this.position.lerp(this._desired, k);
-      this.target.lerp(this._lookAt, 1 - Math.exp(-11 * dt));
+      this.chaseQuat.slerp(quat, 1 - Math.exp(-CHASE_SWING * dt));
+      this.chaseTas = damp(this.chaseTas, t.tas, 1.5, dt);
     }
-    // Again after the lerp: easing between two points that are each above the
-    // ground can still pass through a rise between them.
-    this.liftAboveGround(this.position);
+  }
 
-    // Blend a fraction of the aircraft's roll into the camera up-vector.
+  /** The chase camera's up: part of the aircraft's roll, eased. */
+  private chaseUp(dt: number, quat: THREE.Quaternion, out: THREE.Vector3): void {
     this._aircraftUp.set(0, 1, 0).applyQuaternion(quat);
     this._blendUp.set(0, 1, 0).lerp(this._aircraftUp, 0.45).normalize();
-    this.up.lerp(this._blendUp, 1 - Math.exp(-8 * dt)).normalize();
+    if (!this.initialised) out.copy(this._blendUp);
+    else out.lerp(this._blendUp, 1 - Math.exp(-8 * dt)).normalize();
+  }
 
+  private updateChase(dt: number, pos: THREE.Vector3, quat: THREE.Quaternion,
+    t: CameraTelemetry, s: number): void {
+    this.swingChase(dt, quat, t);
+    this.chasePose(pos, t, s, this.position, this.target);
+    this.chaseUp(dt, quat, this.up);
     this.camera.position.copy(this.position);
     this.camera.up.copy(this.up);
     this.camera.lookAt(this.target);
   }
 
-  private updateCockpit(
-    dt: number,
-    aircraft: Aircraft,
-    pos: THREE.Vector3,
-    quat: THREE.Quaternion,
-  ): void {
-    this._desired.copy(aircraft.eyePoint).applyQuaternion(quat).add(pos);
+  /**
+   * The cockpit: at the pilot's eye, with a little rotational lag so hard
+   * manoeuvres read in here too, and a head that turns.
+   */
+  private updateCockpit(dt: number, subject: CameraSubject, pos: THREE.Vector3,
+    quat: THREE.Quaternion): void {
+    if (!this.initialised) this.cockpitQuat.copy(quat);
+    else this.cockpitQuat.slerp(quat, 1 - Math.exp(-20 * dt));
+
+    // Where the head wants to point: the hat, or the bandit.
+    let wantYaw = this.lookYaw;
+    let wantPitch = this.lookPitch;
+    const tg = this.combat.target;
+    if (this.padlock && tg !== null) {
+      const eye = this._v1.copy(subject.eyePoint).applyQuaternion(quat).add(pos);
+      const b = this._v2.copy(tg.position).sub(eye).applyQuaternion(this._q.copy(quat).invert());
+      let yaw = Math.atan2(b.x, -b.z);
+      const pitch = Math.atan2(b.y, Math.hypot(b.x, b.z));
+      // Dead astern the bearing flips from +180° to −180°. A head does not
+      // snap across the back of the seat: it stays on the side it is on.
+      if (Math.abs(yaw) > HEAD_YAW - 0.1 && Math.abs(this.headYaw) > 1.2
+        && Math.sign(yaw) !== Math.sign(this.headYaw)) {
+        yaw = Math.sign(this.headYaw) * HEAD_YAW;
+      }
+      wantYaw = clamp(yaw, -HEAD_YAW, HEAD_YAW);
+      wantPitch = clamp(pitch, HEAD_PITCH_DOWN, HEAD_PITCH_UP);
+    }
+    if (!this.initialised) {
+      this.headYaw = wantYaw;
+      this.headPitch = wantPitch;
+    } else {
+      this.headYaw = damp(this.headYaw, wantYaw, 9, dt);
+      this.headPitch = damp(this.headPitch, wantPitch, 9, dt);
+    }
+
+    // Looking round leans the head out to see past the fuselage — and back
+    // over the shoulder the pilot rises in his seat to see over the decking.
+    const sy = Math.sin(this.headYaw);
+    const back = (1 - Math.cos(this.headYaw)) * 0.5;
+    this._desired.copy(subject.eyePoint);
+    this._desired.x += sy * 0.1 + Math.sign(sy) * back * 0.08;
+    this._desired.y += back * 0.06 + Math.max(0, -this.headPitch) * 0.03;
+    this._desired.applyQuaternion(quat).add(pos);
     this.camera.position.copy(this._desired);
 
-    // A little rotational lag so hard manoeuvres read in the cockpit too.
-    if (!this.initialised) this._q.copy(quat);
-    else this._q.slerp(quat, 1 - Math.exp(-24 * dt));
-    this.camera.quaternion.copy(this._q);
-    this.camera.up.set(0, 1, 0).applyQuaternion(this._q);
+    // Body attitude, then the head: yaw about the body's up, then pitch.
+    this._q.setFromAxisAngle(AXIS_Y, -this.headYaw);
+    this._q2.setFromAxisAngle(AXIS_X, this.headPitch);
+    this.camera.quaternion.copy(this.cockpitQuat).multiply(this._q).multiply(this._q2);
+    this.camera.up.set(0, 1, 0).applyQuaternion(this.cockpitQuat);
+  }
+
+  /**
+   * The target view: padlock from outside, as the classic flight games did it.
+   *
+   * The camera sits behind and above the player on the line from the target
+   * through the player, and aims between them — the player low in the frame,
+   * the bandit above his top wing — so wherever the enemy goes the player can
+   * see where he is and which way to pull. With no target it is the chase view,
+   * and it eases between the two as targets come and go.
+   *
+   * Three things keep it from ever flipping. The line's elevation is held
+   * inside ±70°, so a bandit straight overhead swings the camera round beneath
+   * rather than turning the world over. The line is turned toward the target
+   * at a limited rate, so one that flashes past at ten metres swings the view,
+   * it does not whip it. And the lens opens as far as it must to hold both:
+   * whatever the damping costs in aim, the field of view pays back.
+   */
+  private updateTarget(dt: number, pos: THREE.Vector3, quat: THREE.Quaternion,
+    t: CameraTelemetry, s: number): void {
+    // The chase view is always computed: it is what this eases from and to.
+    this.swingChase(dt, quat, t);
+    const chasePos = this._v3;
+    const chaseLook = this._v4;
+    this.chasePose(pos, t, s, chasePos, chaseLook);
+    this.chaseUp(dt, quat, this.up);
+
+    const tg = this.combat.target;
+    if (tg !== null) this.tgtLast.copy(tg.position);
+    // Coming in from the plain chase, there is no old line worth swinging
+    // from: take the new one as it is and let the blend do the easing.
+    const fromChase = this.tgtBlend === 0;
+    const want = tg !== null ? 1 : 0;
+    if (!this.initialised) this.tgtBlend = want;
+    else this.tgtBlend = damp(this.tgtBlend, want, 4, dt);
+    if (this.tgtBlend > 0.999) this.tgtBlend = 1;
+    if (this.tgtBlend < 0.001) this.tgtBlend = 0;
+
+    // The line from the player to the target, clamped and damped.
+    const raw = this._v1.copy(this.tgtLast).sub(pos);
+    if (raw.lengthSq() < 1e-4 || (!this.tgtKnown && tg === null)) {
+      raw.set(0, 0, -1).applyQuaternion(quat);
+    }
+    raw.normalize();
+    clampElevation(raw, TARGET_MAX_ELEVATION);
+    if (!this.initialised || !this.tgtKnown || fromChase) {
+      this.tgtDir.copy(raw);
+      this.tgtKnown = tg !== null;
+    } else {
+      dampDirection(this.tgtDir, raw, 6, 3.2, dt);
+    }
+    // Up is world up, square to the line. The clamp keeps the line far enough
+    // off vertical for this always to exist.
+    const upWant = this._v2.set(0, 1, 0).addScaledVector(this.tgtDir, -this.tgtDir.y).normalize();
+    if (!this.initialised) this.tgtUp.copy(upWant);
+    else this.tgtUp.lerp(upWant, 1 - Math.exp(-10 * dt)).normalize();
+
+    const back = (TARGET_BACK + clamp(t.tas, 0, 80) * 0.03) * s;
+    const tPos = this._desired.copy(pos)
+      .addScaledVector(this.tgtDir, -back)
+      .addScaledVector(this.tgtUp, TARGET_UP * s);
+
+    // Blend the two poses: position linearly, aim by angle, up linearly.
+    const b = smoothstep(0, 1, this.tgtBlend);
+    this.position.copy(chasePos).lerp(tPos, b);
+    const tgtScale = scaleOf(tg?.cameraScale);
+    // A target that has come to sit on the lens (a collision course seen from
+    // behind the player) is not allowed to put the camera inside it.
+    if (b > 0) {
+      keepAway(this.position, this.tgtLast, 5.5 * tgtScale);
+      keepAway(this.position, pos, 5.2 * s);
+    }
+    this.liftAboveGround(this.position);
+
+    const toChase = this._v1.copy(chaseLook).sub(this.position).normalize();
+    let fit = 0;
+    if (b > 0) {
+      const toP = this._v2.copy(pos).sub(this.position);
+      const dP = Math.max(toP.length(), 1);
+      toP.divideScalar(dP);
+      const toT = this._v3.copy(this.tgtLast).sub(this.position);
+      const dT = Math.max(toT.length(), 1);
+      toT.divideScalar(dT);
+      const aimT = slerpDirection(toP, toT, TARGET_AIM, this._v4);
+      slerpDirection(toChase, aimT, b, this._lookAt);
+      this.camera.up.copy(this._blendUp.copy(this.up).lerp(this.tgtUp, b).normalize());
+      // How wide the lens must be to hold both, measured in the camera's own
+      // frame so the wider horizontal field is used where it is available.
+      this.target.copy(this.position).add(this._lookAt);
+      this.camera.position.copy(this.position);
+      this.camera.lookAt(this.target);
+      fit = this.fitBoth(toP, dP, s, toT, dT, tgtScale) * b;
+    } else {
+      this._lookAt.copy(toChase);
+      this.target.copy(this.position).add(this._lookAt);
+      this.camera.up.copy(this.up);
+      this.camera.position.copy(this.position);
+      this.camera.lookAt(this.target);
+    }
+    // Opens fast, closes slowly: late to widen is a target out of frame, late
+    // to narrow is only a lens that breathes.
+    if (!this.initialised) this.tgtFit = fit;
+    else this.tgtFit += (fit - this.tgtFit) * (1 - Math.exp(-(fit > this.tgtFit ? 20 : 1.5) * dt));
+    this.tgtFit = Math.min(Math.max(this.tgtFit, fit), 110);
+  }
+
+  /**
+   * Vertical field of view, degrees, that holds both directions (with room for
+   * the aircraft around each) given how the camera is now aimed.
+   */
+  private fitBoth(toP: THREE.Vector3, dP: number, s: number,
+    toT: THREE.Vector3, dT: number, sT: number): number {
+    this.camera.updateMatrixWorld(true);
+    const inv = this._m.copy(this.camera.matrixWorld).invert();
+    const tanHalfH = (dir: THREE.Vector3, pad: number): [number, number] => {
+      const v = this._step.copy(dir).transformDirection(inv);
+      const forward = Math.max(-v.z, 0.05);
+      const ax = Math.atan(Math.abs(v.x) / forward) + pad;
+      const ay = Math.atan(Math.abs(v.y) / forward) + pad;
+      return [ax, ay];
+    };
+    const [px, py] = tanHalfH(toP, Math.atan((3.5 * s) / dP));
+    const [tx, ty] = tanHalfH(toT, Math.atan((3.5 * sT) / dT));
+    const needY = Math.max(py, ty);
+    const needX = Math.max(px, tx);
+    const aspect = this.camera.aspect > 0 ? this.camera.aspect : 16 / 9;
+    // Horizontal half-angle back to the vertical field it implies.
+    const fromX = Math.atan(Math.tan(Math.min(needX, 1.5)) / aspect);
+    const half = Math.min(Math.max(needY, fromX) / 0.9, 1.5);
+    return 2 * half * (180 / Math.PI);
   }
 
   /**
    * The camera you drive yourself.
-   *
-   * The drag sets a *rate* that decays rather than moving the camera directly:
-   * a raw one-to-one drag feels like scrubbing a video, and every flick leaves
-   * the camera exactly where the mouse stopped. With a little weight it settles
-   * instead, which is what makes hand-held camera work look deliberate.
    */
-  private updateFree(dt: number, pos: THREE.Vector3, quat: THREE.Quaternion, t: Telemetry): void {
-    this.trackAircraft(dt, pos);
+  private updateFree(dt: number, pos: THREE.Vector3, quat: THREE.Quaternion,
+    t: CameraTelemetry, s: number, velocity: THREE.Vector3 | undefined): void {
+    this.trackAircraft(dt, pos, velocity);
     this.freeAzimuth += this.freeSpinAz;
     this.freeElevation = clamp(this.freeElevation + this.freeSpinEl, -1.35, 1.35);
     const decay = Math.exp(-9 * dt);
@@ -770,56 +1178,42 @@ export class CameraRig {
       1 - 2 * (this._q.y * this._q.y + this._q.x * this._q.x),
     );
 
-    // Smoothed, and by the shortest way round.
-    //
-    // Taking the yaw raw is what made this camera shake. The aeroplane is
-    // permanently making small yaw corrections — gusts, the dutch roll, the
-    // control laws — and with the camera's bearing welded to that yaw, every
-    // one of them moved the camera *and* its aim at once. The chase view has
-    // always damped both; this had neither, and jittered three times as much.
+    // Smoothed, and by the shortest way round: the aeroplane is permanently
+    // making small yaw corrections, and a camera welded to them jitters.
+    if (!this.freeYawKnown) {
+      this.freeYaw = yaw;
+      this.freeYawKnown = true;
+    }
     let delta = yaw - this.freeYaw;
     while (delta > Math.PI) delta -= Math.PI * 2;
     while (delta < -Math.PI) delta += Math.PI * 2;
     this.freeYaw += delta * (1 - Math.exp(-5 * dt));
 
+    const distance = this.freeDistance * s;
     const a = this.freeAzimuth + this.freeYaw;
-    const horizontal = Math.cos(this.freeElevation) * this.freeDistance;
+    const horizontal = Math.cos(this.freeElevation) * distance;
     this._desired.set(
       pos.x + Math.sin(a) * horizontal,
-      pos.y + Math.sin(this.freeElevation) * this.freeDistance,
+      pos.y + Math.sin(this.freeElevation) * distance,
       pos.z + Math.cos(a) * horizontal,
     );
     this.liftAboveGround(this._desired);
 
-    // Rigid to the aircraft, deliberately.
-    //
-    // Every other view smooths its position, and for a camera that is *riding*
-    // the aeroplane that is right. For one that orbits it, it is what makes the
-    // subject shake: the drawn aircraft advances in simulated time, which lags
-    // real time by anything from zero to one physics step, while an
-    // exponential filter on the camera runs on wall time. The two clocks
-    // disagree by up to 8 ms — two metres at 240 m/s — and that difference is
-    // visible on the aircraft and nowhere else. Below 60 fps the disagreement
-    // changes every frame, which is exactly when it reads as shaking.
-    //
-    // Bolted to the subject, the aircraft cannot move in frame at all. Any
-    // residual timing wobble goes to the scenery, where two metres at a
-    // kilometre is nothing.
+    // Rigid to the aircraft, deliberately: the drawn aircraft advances in
+    // simulated time and an exponential filter on the camera runs on wall time,
+    // and the disagreement between the two is visible on the aircraft and
+    // nowhere else. Bolted to the subject, the aircraft cannot move in frame.
     if (this.freeWorldLocked) {
-      // Standing in the world: take station once, then let the aircraft go.
-      //
-      // It is re-planted once the aeroplane is past and away, which turns the
-      // lock into a run of fly-bys rather than a single one ending in a dot on
-      // the horizon.
+      // Standing in the world: take station once, then let the aircraft go,
+      // and re-plant once the aeroplane is past and away.
       if (!this.freeAnchored) {
-        this.plantFlyby(pos, quat, t, null);
+        this.plantFlyby(pos, quat, t, s, null);
       } else if (this.freeReshape) {
-        // Same moment of the same pass, from a different place beside it: hold
-        // how far along the track the station sits and change only the miss.
+        // Same moment of the same pass, from a different place beside it.
         this.heading(this._flyby, quat);
-        this.plantFlyby(pos, quat, t, this._step.copy(this.freeAnchor).sub(pos).dot(this._flyby));
-      } else if (this.flybyOver(pos, quat)) {
-        this.plantFlyby(pos, quat, t, null);
+        this.plantFlyby(pos, quat, t, s, this._step.copy(this.freeAnchor).sub(pos).dot(this._flyby));
+      } else if (this.flybyOver(pos, quat, t, s)) {
+        this.plantFlyby(pos, quat, t, s, null);
       }
       this.freeReshape = false;
       this.position.copy(this.freeAnchor);
@@ -831,12 +1225,11 @@ export class CameraRig {
 
     this._lookAt.copy(pos);
     if (this.freeAim.lengthSq() > 0) {
-      // The aim offset is in screen terms — right and up as you see it — so it
-      // is applied in the camera's own frame, not the world's.
+      // The aim offset is in screen terms — right and up as you see it.
       this._blendUp.copy(this._desired).sub(pos);
       this._blendUp.set(-this._blendUp.z, 0, this._blendUp.x).normalize(); // camera-right
-      this._lookAt.addScaledVector(this._blendUp, this.freeAim.x);
-      this._lookAt.y += this.freeAim.y;
+      this._lookAt.addScaledVector(this._blendUp, this.freeAim.x * s);
+      this._lookAt.y += this.freeAim.y * s;
     }
 
     this.camera.position.copy(this.position);
@@ -844,19 +1237,25 @@ export class CameraRig {
     this.camera.lookAt(this._lookAt);
   }
 
-  private updateOrbit(dt: number, pos: THREE.Vector3, t: Telemetry): void {
+  /**
+   * The orbit: the *ring* is eased rather than the camera's world position,
+   * so the aeroplane never trails off-centre — a world-space follow at fifty
+   * metres a second sits eight metres behind, which on a sixteen-metre ring is
+   * half the shot. The ring never closes inside a bigger aircraft's wingspan.
+   */
+  private updateOrbit(dt: number, pos: THREE.Vector3, t: CameraTelemetry, s: number): void {
     this.orbitAngle += dt * this.orbit.direction * this.orbit.rate * (Math.PI / 30);
-    const radius = this.orbit.distance + t.tas * 0.05;
+    const radius = Math.max(this.orbit.distance, 5.5 * s) + t.tas * 0.08;
     this._desired.set(
-      pos.x + Math.cos(this.orbitAngle) * radius,
-      pos.y + this.orbit.height,
-      pos.z + Math.sin(this.orbitAngle) * radius,
+      Math.cos(this.orbitAngle) * radius,
+      this.orbit.height,
+      Math.sin(this.orbitAngle) * radius,
     );
-    this.liftAboveGround(this._desired);
-    if (!this.initialised) this.position.copy(this._desired);
-    else this.position.lerp(this._desired, 1 - Math.exp(-6 * dt));
-    // The orbit radius puts the camera tens of metres to the side, which over
-    // broken ground can easily be inside a hill the aircraft is clearing.
+    if (!this.initialised) this.orbitOffset.copy(this._desired);
+    else this.orbitOffset.lerp(this._desired, 1 - Math.exp(-6 * dt));
+    this.position.copy(this.orbitOffset).add(pos);
+    // The orbit radius puts the camera well to the side, which over broken
+    // ground can easily be inside a hill the aircraft is clearing.
     this.liftAboveGround(this.position);
 
     this.camera.position.copy(this.position);
@@ -865,26 +1264,29 @@ export class CameraRig {
   }
 
   /**
-   * Keep a smoothed idea of where the aircraft is heading, from where it has
-   * been. A reset or a change of world teleports it, so an implausible step is
-   * treated as a fresh start rather than a very fast aeroplane.
+   * Keep a smoothed idea of where the aircraft is heading. From its velocity
+   * when the subject reports one; otherwise from where it has been, treating
+   * an implausible step as a fresh start rather than a very fast aeroplane.
    */
-  private trackAircraft(dt: number, pos: THREE.Vector3): void {
+  private trackAircraft(dt: number, pos: THREE.Vector3, velocity: THREE.Vector3 | undefined): void {
     if (dt > 0 && this.freeTrackKnown) {
       this._step.copy(pos).sub(this.freeLastPos);
       const moved = this._step.length();
       if (moved > TELEPORT) {
         this.freeTrackKnown = false;
-        // A reset, or a new landscape. A planted camera has every right to stay
+        // A reset, or a new subject. A planted camera has every right to stay
         // where it was put while the aircraft flies, but not when the aircraft
-        // stops flying and simply reappears somewhere else — that leaves the
-        // shot pointed at a speck on the far side of the world.
+        // simply reappears somewhere else.
         this.freeAnchored = false;
-      }
-      else if (moved > 1e-3) {
-        this._step.divideScalar(moved);
-        if (this.freeTrack.lengthSq() < 1e-6) this.freeTrack.copy(this._step);
-        else this.freeTrack.lerp(this._step, 1 - Math.exp(-3 * dt)).normalize();
+      } else {
+        const speed = velocity?.length() ?? 0;
+        if (velocity !== undefined && speed > 1) this._step.copy(velocity).divideScalar(speed);
+        else if (moved > 1e-3) this._step.divideScalar(moved);
+        else this._step.set(0, 0, 0);
+        if (this._step.lengthSq() > 0) {
+          if (this.freeTrack.lengthSq() < 1e-6) this.freeTrack.copy(this._step);
+          else this.freeTrack.lerp(this._step, 1 - Math.exp(-3 * dt)).normalize();
+        }
       }
     }
     if (!this.freeTrackKnown) {
@@ -895,10 +1297,8 @@ export class CameraRig {
   }
 
   /**
-   * The direction the aircraft is travelling, into `out`.
-   *
-   * Falls back to the nose when there is no track yet — a parked aeroplane has
-   * none, and a fly-by of one is a still life whatever we choose.
+   * The direction the aircraft is travelling, into `out` — falling back to the
+   * nose when there is no track yet.
    */
   private heading(out: THREE.Vector3, quat: THREE.Quaternion): void {
     if (this.freeTrack.lengthSq() > 0.25) out.copy(this.freeTrack).normalize();
@@ -910,10 +1310,9 @@ export class CameraRig {
    *
    * The framing the pilot set still decides how the aeroplane goes by: only the
    * part of that offset lying *along* the flight path is thrown away, replaced
-   * by a lead long enough to watch it come in. What is left is the miss — how
-   * far to the side, how far above — and that is kept exactly.
+   * by a lead long enough to watch it come in. What is left is the miss.
    */
-  private plantFlyby(pos: THREE.Vector3, quat: THREE.Quaternion, t: Telemetry,
+  private plantFlyby(pos: THREE.Vector3, quat: THREE.Quaternion, t: CameraTelemetry, s: number,
     keepAlong: number | null): void {
     this.heading(this._flyby, quat);
 
@@ -921,41 +1320,26 @@ export class CameraRig {
     this._miss.addScaledVector(this._flyby, -this._miss.dot(this._flyby));
 
     // A framing from dead astern misses by nothing at all, which would put the
-    // lens exactly on the flight path for the aircraft to fly through. Every
-    // shot gets a miss; the direction of the pilot's framing is kept, so an
-    // overhead view still passes overhead rather than being shoved sideways.
-    const miss = Math.max(MIN_MISS, this.freeDistance * 0.35);
+    // lens exactly on the flight path for the aircraft to fly through.
+    const miss = Math.max(MIN_MISS * s, this.freeDistance * s * 0.35);
     if (this._miss.lengthSq() < miss * miss) {
       if (this._miss.lengthSq() > 1) this._miss.setLength(miss);
       else this._miss.set(1, 0, 0).applyQuaternion(quat).multiplyScalar(miss);
     }
 
-    // Far enough ahead to be worth watching it arrive, and never so close that
-    // a slow aeroplane is on top of the camera before the shot has begun —
-    // unless this is a reframe, which keeps whatever is left of the pass. That
-    // number is negative once the aeroplane is past, and it should be: you can
-    // change the angle on a departing aircraft without it flying back at you.
-    let lead = keepAlong ?? Math.max(t.tas * LEAD_SECONDS, this.freeDistance * 3);
+    // Far enough ahead to be worth watching it arrive — unless this is a
+    // reframe, which keeps whatever is left of the pass.
+    let lead = keepAlong ?? Math.max(t.tas * LEAD_SECONDS, this.freeDistance * s * 3, MIN_LEAD * s);
 
     // A descending track plants the station below the ground, and lifting it
-    // back out — which is what has to happen, a buried camera sees nothing —
-    // silently wrecks the shot: the station leaves the flight path, and the
-    // aeroplane that was going to pass at fourteen metres passes a kilometre
-    // and a half overhead instead. Shorten the lead until the station clears
-    // the terrain, so it stays *on* the path and the shot is merely briefer.
-    // Backing off geometrically rather than solving for it makes no assumption
-    // about the ground being flat, which over this terrain it is not.
-    // Only when taking fresh station. A reframe has a lead it must keep, and
-    // shortening it to dodge the ground would be the shot skipping forwards
-    // under the pilot's hand; the lift below covers that case instead.
+    // back out silently wrecks the shot. Shorten the lead until the station
+    // clears the terrain, so it stays *on* the path and the shot is briefer.
     if (keepAlong === null) {
       for (let i = 0; i < 8 && this.clearance(pos, lead) < CAMERA_MIN_CLEARANCE; i++) lead *= 0.6;
     }
 
     this.freeAnchor.copy(pos).add(this._miss).addScaledVector(this._flyby, lead);
-    // Still the backstop, for a dive straight at a cliff face where no lead is
-    // short enough. That shot is lost either way; the camera should at least
-    // not be inside a hill.
+    // Still the backstop, for a dive straight at a hillside.
     this.liftAboveGround(this.freeAnchor);
     this.freeAnchored = true;
   }
@@ -969,43 +1353,53 @@ export class CameraRig {
   /**
    * Whether the aeroplane is past the camera and far enough gone to cut.
    *
-   * "Past" is the sign of the camera's bearing along the nose, not a distance:
-   * planting puts the aircraft most of a kilometre away to begin with, so a
-   * plain distance test would call the shot over on the frame it started.
+   * "Past" is the sign of the camera's bearing along the track, not a
+   * distance: planting puts the aircraft a long way off to begin with. "Gone"
+   * scales with speed, so a slow machine is not re-planted while it is still
+   * a shape and a fast one is not held until it is a dot.
    */
-  private flybyOver(pos: THREE.Vector3, quat: THREE.Quaternion): boolean {
+  private flybyOver(pos: THREE.Vector3, quat: THREE.Quaternion, t: CameraTelemetry,
+    s: number): boolean {
     this.heading(this._flyby, quat);
     this._miss.copy(this.freeAnchor).sub(pos);
-    // Still ahead on the current track: the shot has not happened yet. This is
-    // also what rescues a shot the aeroplane has turned out of — the camera
-    // falls behind the new track, and the next line cuts to a fresh one.
     if (this._miss.dot(this._flyby) > 0) return false;
-    return this._miss.length() > Math.max(this.freeDistance * 8, MIN_FLYBY);
+    return this._miss.length() > Math.max(this.freeDistance * s * 8, t.tas * FLYBY_SECONDS,
+      MIN_FLYBY * s);
   }
 
   /**
    * Hold an outside camera above whatever is under it.
    *
    * The chase offset is fixed in the *aircraft's* frame, so pitching up swings
-   * it downward: 4 m up and 17.5 m back becomes 0.7 m *below* the aircraft at
-   * 15° nose-up and 3.8 m below at 25°. On a takeoff rotation, where the
-   * aircraft itself is only a gear height off the runway, that buries the lens
-   * in the tarmac. Clamping here rather than shortening the boom keeps the
-   * framing intact at every other attitude.
+   * it downward — on a tail-dragger sitting nose-high on the grass, right into
+   * it. Clamping here rather than shortening the boom keeps the framing intact
+   * at every other attitude.
    */
   private liftAboveGround(p: THREE.Vector3): void {
     const floor = this.groundHeight(p.x, p.z) + CAMERA_MIN_CLEARANCE;
     if (p.y < floor) p.y = floor;
   }
 
-  /** Rotational jitter, applied after aiming so it never fights the look-at. */
+  /**
+   * Rotational shake, applied after aiming so it never fights the look-at.
+   *
+   * Two kinds, because they feel different. The rumble — buffet, a hit, the
+   * ground rushing by — is a few smooth sines at a handful of hertz: it rocks
+   * the view. The buzz — a rotary at full chat, a pair of Vickers — is noise
+   * every frame: it blurs it.
+   */
   private applyShake(): void {
-    if (this.shake < 0.001) return;
-    const a = this.shake * 0.006;
+    if (this.rumble < 0.001 && this.buzz < 0.001) return;
+    const t = this.shakeClock;
+    const r = this.rumble * 0.006;
+    const b = this.buzz * 0.006;
     this._shakeEuler.set(
-      (Math.random() - 0.5) * a,
-      (Math.random() - 0.5) * a,
-      (Math.random() - 0.5) * a * 1.6,
+      (Math.sin(t * 23.1) + 0.6 * Math.sin(t * 37.7 + 1.3)) * 0.5 * r
+        + (Math.random() - 0.5) * b,
+      (Math.sin(t * 19.3 + 2.1) + 0.6 * Math.sin(t * 41.9)) * 0.5 * r
+        + (Math.random() - 0.5) * b,
+      (Math.sin(t * 17.9 + 0.7) + 0.5 * Math.sin(t * 29.3 + 2.9)) * 0.8 * r
+        + (Math.random() - 0.5) * b * 1.6,
     );
     this.camera.quaternion.multiply(this._shakeQuat.setFromEuler(this._shakeEuler));
   }
@@ -1021,48 +1415,65 @@ export interface FreeView {
   worldLocked: boolean;
 }
 
+const AXIS_X = new THREE.Vector3(1, 0, 0);
+const AXIS_Y = new THREE.Vector3(0, 1, 0);
+
+/** A subject's scale, defended: the camera must never be the reason for a NaN. */
+function scaleOf(v: number | undefined): number {
+  return v !== undefined && Number.isFinite(v) && v > 0 ? clamp(v, 0.3, 6) : 1;
+}
+
+/** Push `p` out to at least `gap` from `centre`, along the line between them. */
+function keepAway(p: THREE.Vector3, centre: THREE.Vector3, gap: number): void {
+  const dx = p.x - centre.x;
+  const dy = p.y - centre.y;
+  const dz = p.z - centre.z;
+  const d2 = dx * dx + dy * dy + dz * dz;
+  if (d2 >= gap * gap) return;
+  const d = Math.sqrt(d2);
+  if (d < 1e-4) {
+    p.set(centre.x, centre.y + gap, centre.z);
+    return;
+  }
+  const k = gap / d;
+  p.set(centre.x + dx * k, centre.y + dy * k, centre.z + dz * k);
+}
+
 /**
- * Metres of orbit height per pixel of drag.
- *
- * The full range is a hundred metres, so this puts it four hundred pixels
- * apart — a deliberate drag rather than a flick, and roughly what the slider
- * beside it costs to sweep end to end.
+ * Metres of orbit height per pixel of drag. The full range is seventy-five
+ * metres, so this puts it about four hundred pixels apart.
  */
-const ORBIT_HEIGHT_PER_PIXEL = 0.25;
+const ORBIT_HEIGHT_PER_PIXEL = 0.19;
 
 /**
  * How far the aircraft may draw away from a world-locked camera before it takes
- * fresh station, metres — a floor under the distance-scaled threshold.
- *
- * At 220 m/s this is a little over three seconds — long enough to read as a
- * shot that ends, where a couple of hundred metres re-plants roughly once a
- * second and reads as a stutter. The aeroplane is small by the end of it, which
- * is what watching one fly away looks like.
+ * fresh station: this many seconds of flight, or eight framing distances, or
+ * the floor below — whichever is furthest. Three and a half seconds reads as a
+ * shot that ends; much less and the re-plant reads as a stutter.
  */
-const MIN_FLYBY = 700;
+const FLYBY_SECONDS = 3.5;
+const MIN_FLYBY = 120;
 
 /**
- * How many seconds of approach a fly-by is planted with.
- *
- * At 220 m/s that is most of a kilometre of the aeroplane growing in the frame,
- * which with the departure above makes a shot around seven seconds long.
+ * How many seconds of approach a fly-by is planted with. At fifty metres a
+ * second that is two hundred and fifty metres of the aeroplane growing in the
+ * frame — a scout is a readable shape from there.
  */
-const LEAD_SECONDS = 4;
+const LEAD_SECONDS = 5;
+/** The shortest approach a fly-by is ever planted with, metres (scaled). */
+const MIN_LEAD = 60;
 
 /**
- * The closest a fly-by will let the aircraft pass the lens, metres.
- *
- * Near enough to be a whip, far enough that the aeroplane does not fly through
- * the camera — which is what a framing from dead astern would otherwise ask for.
+ * The closest a fly-by will let the aircraft pass the lens, metres at the
+ * reference scale: near enough to be a whip, clear of an 8.5 m wingspan.
  */
-const MIN_MISS = 14;
+const MIN_MISS = 6;
 
 /** A one-frame move further than this is a reset, not flight, metres. */
-const TELEPORT = 500;
+const TELEPORT = 200;
 
 /**
  * Radians of orbit per pixel of drag — about a quarter of a degree, so a
- * comfortable 300 px drag swings the camera through roughly seventy degrees and
- * a full circle is two of them.
+ * comfortable 300 px drag swings the camera through roughly seventy degrees.
  */
 const ORBIT_PER_PIXEL = 0.004;

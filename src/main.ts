@@ -1393,6 +1393,8 @@ function boot(): void {
       lighting.sky.copy(fog.color).multiplyScalar(0.55 + 0.35 * Math.max(0, lighting.sunDir.y));
     }
     game.battle.fx.setLighting(lighting);
+    // Searchlights come on as the sun goes down.
+    game.battle.night = clamp((0.12 - lighting.sunDir.y) / 0.16, 0, 1);
   }
 
   const _look = new THREE.Vector3();

@@ -1,0 +1,202 @@
+import * as THREE from 'three';
+import { flashTexture, propBlurTexture, propTextures } from './props';
+
+/**
+ * Materials. There are deliberately few of them:
+ *
+ *  - skin   — the painted livery atlas (fabric, dope, plywood, painted metal).
+ *             One per (type, livery), cloned per aircraft only so each can
+ *             carry its own damage uniform. The clones share one GL program:
+ *             the damage hook is the same function for all of them, and
+ *             three keys programs on the hook's source.
+ *  - props  — every piece of hardware on every aircraft (see props.ts).
+ *  - glass  — windscreens, instrument glasses, goggles.
+ *  - disc   — the blurred propeller, per aircraft for its opacity.
+ *  - flash  — additive muzzle flash, shared.
+ */
+
+export interface DamageUniforms {
+  uDamage: { value: number };
+  uSeed: { value: number };
+  /** Metres per unit of uv: bullet holes are sized in metres wherever they land. */
+  uMetres: { value: number };
+}
+
+/**
+ * Bullet damage painted in the fragment shader, so a hit costs nothing but a
+ * uniform. Holes live on a jittered grid in *atlas metres*; each cell has a
+ * threshold and punches through once accumulated damage passes it, so holes
+ * appear one by one and never move. Mirrored wing halves share uvs, so the
+ * side of the aircraft is folded into the hash. Past ~60 % damage some holes
+ * become ragged tears, and broad soot creeps over the skin.
+ */
+function damageHook(this: THREE.Material, shader: THREE.WebGLProgramParametersWithUniforms): void {
+  const u = (this.userData as { dmg: DamageUniforms }).dmg;
+  shader.uniforms.uDamage = u.uDamage;
+  shader.uniforms.uSeed = u.uSeed;
+  shader.uniforms.uMetres = u.uMetres;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vDmgPos;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvDmgPos = position;');
+  shader.fragmentShader = shader.fragmentShader
+    .replace(
+      '#include <common>',
+      `#include <common>
+varying vec3 vDmgPos;
+uniform float uDamage;
+uniform float uSeed;
+uniform float uMetres;
+float dmgHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float dmgNoise(vec3 p) {
+  vec3 i = floor(p); vec3 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  float n = dot(i, vec3(1.0, 57.0, 113.0));
+  vec4 a = fract(sin(vec4(n, n + 1.0, n + 57.0, n + 58.0)) * 43758.5453);
+  vec4 b = fract(sin(vec4(n + 113.0, n + 114.0, n + 170.0, n + 171.0)) * 43758.5453);
+  vec4 m = mix(a, b, f.z);
+  vec2 q = mix(m.xy, m.zw, f.y);
+  return mix(q.x, q.y, f.x);
+}`,
+    )
+    .replace(
+      '#include <color_fragment>',
+      `#include <color_fragment>
+#ifdef USE_MAP
+if (uDamage > 0.002) {
+  vec2 m = vMapUv * uMetres;
+  float side = vDmgPos.x >= 0.0 ? 0.0 : 31.0;
+  const float CELL = 0.3;
+  vec2 cell = floor(m / CELL);
+  float hole = 0.0, ring = 0.0, soot = 0.0;
+  for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) {
+    vec2 c = cell + vec2(float(dx), float(dy)) + side + uSeed;
+    float h = dmgHash(c);
+    if (uDamage < 0.04 + h * 1.2) continue;
+    vec2 centre = (cell + vec2(float(dx), float(dy)) + 0.2 + 0.6 * vec2(dmgHash(c + 3.1), dmgHash(c + 7.7))) * CELL;
+    vec2 d = m - centre;
+    float tear = step(0.72, dmgHash(c + 9.2)) * smoothstep(0.55, 0.95, uDamage);
+    float r = 0.011 + 0.014 * dmgHash(c + 1.3) + 0.05 * tear;
+    float ang = atan(d.y, d.x);
+    float jag = 1.0 + (0.28 + 0.3 * tear) * sin(ang * 5.0 + h * 40.0) + 0.18 * sin(ang * 11.0 + h * 13.0);
+    float dist = length(d) / (r * jag);
+    hole = max(hole, 1.0 - smoothstep(0.8, 1.0, dist));
+    ring = max(ring, 1.0 - smoothstep(1.0, 2.1, dist));
+    soot = max(soot, 1.0 - smoothstep(1.4, 4.5 + 3.0 * tear, dist));
+  }
+  float n = dmgNoise(vDmgPos * 1.6 + uSeed) * 0.65 + dmgNoise(vDmgPos * 4.1) * 0.35;
+  float scorch = smoothstep(0.62, 0.9, n + uDamage * 0.45 - 0.2) * smoothstep(0.3, 1.0, uDamage);
+  diffuseColor.rgb *= 1.0 - 0.4 * soot;
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.5 + vec3(0.02, 0.017, 0.012), ring * 0.75);
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.028, 0.026), scorch * 0.85);
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.006, 0.005, 0.004), hole);
+}
+#endif`,
+    );
+}
+
+export function makeDamageUniforms(metres: number, seed = Math.random() * 100): DamageUniforms {
+  return { uDamage: { value: 0 }, uSeed: { value: Math.floor(seed) }, uMetres: { value: metres } };
+}
+
+export interface SkinMaps {
+  map: THREE.Texture;
+  normal: THREE.Texture;
+  orm: THREE.Texture;
+  metres: number;
+}
+
+export function skinMaterial(maps: SkinMaps): THREE.MeshPhysicalMaterial {
+  const m = new THREE.MeshPhysicalMaterial({
+    map: maps.map,
+    normalMap: maps.normal,
+    normalScale: new THREE.Vector2(1, 1),
+    roughnessMap: maps.orm,
+    metalnessMap: maps.orm,
+    roughness: 1,
+    metalness: 1,
+    vertexColors: true,
+    // Doped linen has a soft satin sheen rather than a gloss coat.
+    clearcoat: 0.18,
+    clearcoatRoughness: 0.55,
+    envMapIntensity: 0.9,
+  });
+  armDamage(m, makeDamageUniforms(maps.metres, 0));
+  return m;
+}
+
+export function armDamage(m: THREE.Material, u: DamageUniforms): void {
+  m.userData.dmg = u;
+  m.onBeforeCompile = damageHook;
+}
+
+/** Per-aircraft copy of a skin material with its own damage uniforms. */
+export function instanceSkin(base: THREE.MeshPhysicalMaterial): THREE.MeshPhysicalMaterial {
+  const m = base.clone();
+  const bu = base.userData.dmg as DamageUniforms;
+  armDamage(m, makeDamageUniforms(bu.uMetres.value));
+  return m;
+}
+
+let props: THREE.MeshStandardMaterial | null = null;
+export function propsMaterial(): THREE.MeshStandardMaterial {
+  if (props) return props;
+  const t = propTextures();
+  props = new THREE.MeshStandardMaterial({
+    map: t.map,
+    normalMap: t.normal,
+    roughnessMap: t.orm,
+    metalnessMap: t.orm,
+    roughness: 1,
+    metalness: 1,
+    vertexColors: true,
+  });
+  return props;
+}
+
+let glass: THREE.MeshPhysicalMaterial | null = null;
+export function glassMaterial(): THREE.MeshPhysicalMaterial {
+  if (glass) return glass;
+  glass = new THREE.MeshPhysicalMaterial({
+    color: 0xd8e4e0,
+    roughness: 0.05,
+    metalness: 0,
+    transparent: true,
+    opacity: 0.16,
+    depthWrite: false,
+    envMapIntensity: 1.4,
+    // Old celluloid/glass has a faint yellow-green cast.
+    specularColor: new THREE.Color(0xffffff),
+  });
+  return glass;
+}
+
+let discBase: THREE.MeshStandardMaterial | null = null;
+export function discMaterial(): THREE.MeshStandardMaterial {
+  if (!discBase) {
+    discBase = new THREE.MeshStandardMaterial({
+      map: propBlurTexture(),
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      roughness: 0.55,
+      metalness: 0,
+      opacity: 1,
+    });
+  }
+  return discBase.clone();
+}
+
+let flash: THREE.MeshBasicMaterial | null = null;
+export function flashMaterial(): THREE.MeshBasicMaterial {
+  if (flash) return flash;
+  flash = new THREE.MeshBasicMaterial({
+    map: flashTexture(),
+    // HDR colour: over the bloom threshold, but a finite, sane number.
+    color: new THREE.Color(5.5, 3.6, 1.6),
+    blending: THREE.AdditiveBlending,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    fog: false,
+  });
+  return flash;
+}

@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { applyHaze } from './Haze';
-import { terrainHeight, riverStrength } from './Worlds';
+import { terrainHeight, riverStrength, clearingAt } from './Worlds';
 import { farmland, farmlandPlot, farmlandHome } from './Settlements';
-import { cityDensity } from './City';
+import { forestCover } from './Forest';
+import { FRONT_CONSTS, FRONT_GLSL, fieldLocal, frontUniforms } from './Front';
+import { roadHalfWidth, roadSignedDistance, roadValidity } from './Roads';
 import type { TerrainStyle } from './Worlds';
 
 export {
@@ -77,17 +79,10 @@ export class Terrain {
     uSnowLine: { value: 1380 },
     uTreeLine: { value: 710 },
     uStrata: { value: 0 },
-    /**
-     * How wooded this world is, 0 to 1.
-     *
-     * Decided on the CPU from the world's *base* ground colour, not from the
-     * one in `uGrass`. That one carries the season, and the season moves it
-     * enough to change the answer: an autumn tint takes the Isles' green margin
-     * from 0.12 down to 0.017, so a gate read live would have deleted every
-     * forest in autumn and grown them back in winter. Whether a landscape has
-     * trees is a property of the landscape.
-     */
-    uWooded: { value: 1 },
+    /** Height below which the ground is beach sand; far below the sea where there is none. */
+    uBeach: { value: 16 },
+    /** Canopy colour for the season: green in summer, rust in autumn, bare twigs in winter. */
+    uTimber: { value: new THREE.Vector3(0.05, 0.09, 0.05) },
   };
 
   private readonly cache = new Map<string, THREE.Mesh>();
@@ -114,14 +109,15 @@ export class Terrain {
     for (const mesh of this.cache.values()) mesh.castShadow = on;
   }
 
-  setStyle(style: TerrainStyle, wooded = 1): void {
-    this.styleUniforms.uWooded.value = wooded;
+  setStyle(style: TerrainStyle, extra: { beach: number; timber: [number, number, number] }): void {
     this.styleUniforms.uGrass.value.set(...style.grass);
     this.styleUniforms.uDry.value.set(...style.dry);
     this.styleUniforms.uRock.value.set(...style.rock);
     this.styleUniforms.uSnowLine.value = style.snowLine;
     this.styleUniforms.uTreeLine.value = style.treeLine;
     this.styleUniforms.uStrata.value = style.strata;
+    this.styleUniforms.uBeach.value = extra.beach;
+    this.styleUniforms.uTimber.value.set(...extra.timber);
   }
 
   /**
@@ -322,34 +318,25 @@ function buildChunkGeometry(node: QuadNode): THREE.BufferGeometry {
 
   const positions = new Float32Array(total * 3);
   const normals = new Float32Array(total * 3);
-  // How cultivated each vertex is. Carried on the mesh rather than drawn over
-  // it, so village farmland is part of the terrain surface at every LOD.
   /**
    * Farmland: how cultivated a vertex is, and where it sits in its village's
-   * own grid.
-   *
-   * Three numbers rather than one. The strength alone could only ever produce
-   * a soft blob filled with noise, and what actually reads as farmland from
-   * the air is straight boundaries meeting at corners — which needs a frame to
-   * be straight *in*, and only the CPU knows which village won the point.
+   * own grid — (field strength, plot u, plot v, ordinary-village strength).
    */
-  // (field strength, plot u, plot v, ordinary-village strength)
   const settled = new Float32Array(total * 4);
   /** River strength per vertex, so water is part of the surface at every LOD. */
   const river = new Float32Array(total);
   /**
-   * How built-up each vertex is. Carried the same way, and for the same reason
-   * the farmland is: at cruise a tower is a few pixels, and what actually makes
-   * a city read from altitude is the ground between the towers going grey.
+   * Forest cover per vertex. The same CPU function the tree scatter asks, so
+   * the painted canopy and the 3D trees are one wood.
    */
-  const built = new Float32Array(total);
+  const forest = new Float32Array(total);
+  /** Signed distance to the nearest road, how far to trust it, and its half-width. */
+  const road = new Float32Array(total * 3);
+  /** Aerodrome frame: along, right, half-length, half-width (zero clear of any field). */
+  const field = new Float32Array(total * 4);
 
-  // Sample the height field once into a grid with a one-vertex border on each
-  // side. The neighbours a central-difference normal needs are exactly the
-  // adjacent grid vertices, so sampling them separately would evaluate the
-  // (relatively expensive) height function five times per vertex instead of one.
-  // The border ring is what lets edge vertices use real neighbours, keeping
-  // shading continuous across chunk and LOD boundaries.
+  // Sample the height field once into a grid with a one-vertex border, so the
+  // central-difference normals use real neighbours at the chunk edges.
   const pad = cols + 2;
   const heights = new Float32Array(pad * pad);
   const wet = new Float32Array(pad * pad);
@@ -357,8 +344,8 @@ function buildChunkGeometry(node: QuadNode): THREE.BufferGeometry {
     for (let i = -1; i <= N + 1; i++) {
       const k = (j + 1) * pad + (i + 1);
       heights[k] = terrainHeight(node.x - half + i * step, node.z - half + j * step);
-      // Read straight after the height: the river strength is a stash on the
-      // last call, not a second evaluation of the field.
+      // Read straight after the height: a stash on the last call, not a
+      // second evaluation of the field.
       wet[k] = riverStrength();
     }
   }
@@ -370,6 +357,8 @@ function buildChunkGeometry(node: QuadNode): THREE.BufferGeometry {
   for (let j = 0; j < cols; j++) {
     for (let i = 0; i < cols; i++) {
       const idx = j * cols + i;
+      const wx = node.x - half + i * step;
+      const wz = node.z - half + j * step;
 
       const y = heightAt(i, j);
       if (y < minH) minH = y;
@@ -378,18 +367,14 @@ function buildChunkGeometry(node: QuadNode): THREE.BufferGeometry {
       positions[idx * 3] = -half + i * step;
       positions[idx * 3 + 1] = y;
       positions[idx * 3 + 2] = -half + j * step;
-      settled[idx * 4] = farmland(node.x - half + i * step, node.z - half + j * step);
-      // Both read straight off the back of that call, the way the river
-      // strength is — one traversal answers for both kinds of village.
+      settled[idx * 4] = farmland(wx, wz);
       const plot = farmlandPlot();
       settled[idx * 4 + 1] = plot[0];
       settled[idx * 4 + 2] = plot[1];
       settled[idx * 4 + 3] = farmlandHome();
-      river[idx] = wet[(j + 1) * pad + (i + 1)];
-      built[idx] = cityDensity(node.x - half + i * step, node.z - half + j * step);
+      const wetHere = wet[(j + 1) * pad + (i + 1)];
+      river[idx] = wetHere;
 
-      // Central difference at this chunk's own spacing, so the normals match the
-      // resolution of the geometry rather than shimmering with detail it can't show.
       const nx = heightAt(i - 1, j) - heightAt(i + 1, j);
       const ny = 2 * step;
       const nz = heightAt(i, j - 1) - heightAt(i, j + 1);
@@ -397,6 +382,21 @@ function buildChunkGeometry(node: QuadNode): THREE.BufferGeometry {
       normals[idx * 3] = nx * inv;
       normals[idx * 3 + 1] = ny * inv;
       normals[idx * 3 + 2] = nz * inv;
+
+      const rd = roadSignedDistance(wx, wz);
+      const rv = roadValidity();
+      road[idx * 3] = rd;
+      road[idx * 3 + 1] = rv;
+      road[idx * 3 + 2] = roadHalfWidth();
+
+      const f = fieldLocal(wx, wz);
+      if (f !== null) field.set(f, idx * 4);
+
+      const cleared = Math.max(
+        clearingAt(wx, wz, Math.max(settled[idx * 4], settled[idx * 4 + 3]), wetHere),
+        rv > 0 ? 1 - Math.min(1, Math.max(0, (Math.abs(rd) - 6) / 10)) : 0,
+      );
+      forest[idx] = forestCover(wx, wz, y, 1 - ny * inv, cleared);
     }
   }
 
@@ -424,11 +424,11 @@ function buildChunkGeometry(node: QuadNode): THREE.BufferGeometry {
       normals[next * 3] = normals[src * 3];
       normals[next * 3 + 1] = normals[src * 3 + 1];
       normals[next * 3 + 2] = normals[src * 3 + 2];
-      settled[next * 4] = settled[src * 4];
-      settled[next * 4 + 1] = settled[src * 4 + 1];
-      settled[next * 4 + 2] = settled[src * 4 + 2];
-      settled[next * 4 + 3] = settled[src * 4 + 3];
+      for (let k = 0; k < 4; k++) settled[next * 4 + k] = settled[src * 4 + k];
+      for (let k = 0; k < 4; k++) field[next * 4 + k] = field[src * 4 + k];
+      for (let k = 0; k < 3; k++) road[next * 3 + k] = road[src * 3 + k];
       river[next] = river[src];
+      forest[next] = forest[src];
       next++;
     }
     for (let k = 0; k < border.length - 1; k++) {
@@ -462,13 +462,12 @@ function buildChunkGeometry(node: QuadNode): THREE.BufferGeometry {
   geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   geo.setAttribute('aSettled', new THREE.BufferAttribute(settled, 4));
   geo.setAttribute('aRiver', new THREE.BufferAttribute(river, 1));
-  geo.setAttribute('aCity', new THREE.BufferAttribute(built, 1));
+  geo.setAttribute('aForest', new THREE.BufferAttribute(forest, 1));
+  geo.setAttribute('aRoad', new THREE.BufferAttribute(road, 3));
+  geo.setAttribute('aField', new THREE.BufferAttribute(field, 4));
   geo.setIndex(indices);
-  // Bound the geometry where it actually is. A sphere centred on y = 0 with a
-  // fixed radius only works while terrain stays near sea level: in a range whose
-  // peaks are kilometres up, a summit chunk falls entirely outside its own
-  // bounds and three culls it while it is still on screen — which reads as
-  // near-field terrain going transparent or flickering as you turn.
+  // Bound the geometry where it actually is, or a summit chunk falls outside
+  // its own bounds and is culled while still on screen.
   const lowest = minH - skirtDepth;
   const midY = (maxH + lowest) / 2;
   const halfY = (maxH - lowest) / 2;
@@ -482,13 +481,86 @@ function buildChunkGeometry(node: QuadNode): THREE.BufferGeometry {
 
 // --------------------------------------------------------------------- material
 
+const C = FRONT_CONSTS;
+const f1 = (n: number): string => n.toFixed(1);
+
+/**
+ * Helpers for the battlefield: anti-aliased bands, the trench plans and the
+ * crater grids. All of it world-space and procedural, so it holds from a
+ * hundred metres up to three kilometres without a texture in sight.
+ */
+const BATTLE_GLSL = /* glsl */ `
+${FRONT_GLSL}
+
+// Coverage of a band |dist| < halfW at a pixel footprint of fw metres. Sharp
+// when the band is wider than a pixel, dimmed in proportion when it is not, so
+// thin lines fade into the average tone of the ground instead of shimmering.
+float bfLine(float dist, float halfW, float fw) {
+  float f = max(fw, 1e-3);
+  return clamp((halfW - dist) / f + 0.5, 0.0, 1.0) * min(1.0, 2.0 * halfW / f);
+}
+
+// Distance to a traversed fire trench centred on u = 0: bays at +amp for
+// \`duty\` of each period, stepping back round a traverse to -amp — the
+// crenellated plan that every aerial photograph of the front shows.
+float bfCrenel(float s, float u, float period, float amp, float duty) {
+  float f = fract(s / period);
+  float lvl = f < duty ? amp : -amp;
+  float du = abs(u - lvl);
+  float ds = min(min(f, abs(f - duty)), 1.0 - f) * period;
+  float over = max(abs(u) - amp, 0.0);
+  return min(du, length(vec2(ds, over)));
+}
+
+// Distance to a zig-zag communication trench running along u, centred on s = 0.
+float bfZigzag(float s, float u, float period, float amp) {
+  float tri = abs(fract(u / period) * 2.0 - 1.0) * 2.0 - 1.0;
+  float k = 4.0 * amp / period;
+  return abs(s - amp * tri) / sqrt(1.0 + k * k);
+}
+
+// One grid of shell holes: the 2x2 cells nearest the point (centres are held
+// in the middle half of each cell and reach at most 0.72 of one, so no other
+// cell can reach). Keeps the crater that dominates, normalised by its radius,
+// and accumulates the slope of every bowl for the lighting.
+void bfCraters(vec2 p, float cell, float saltF, float share, float rMin, float rSpan,
+               float dens, float flooded, float fw,
+               inout float bestR, inout float bestWet, inout float bestSize, inout vec2 grad) {
+  vec2 f = p / cell - 0.5;
+  ivec2 g = ivec2(floor(f));
+  uint salt = uint(saltF + uFrontSalt);
+  for (int i = 0; i < 2; i++) {
+    for (int j = 0; j < 2; j++) {
+      ivec2 c = g + ivec2(i, j);
+      if (bfHash(c, salt) > dens * share) continue;
+      vec2 ctr = (vec2(c) + 0.25 + 0.5 * vec2(bfHash(c, salt + 1u), bfHash(c, salt + 2u))) * cell;
+      float R = (rMin + rSpan * bfHash(c, salt + 3u)) * cell;
+      vec2 dv = p - ctr;
+      float dl = length(dv);
+      float r = dl / R;
+      if (r > 1.7) continue;
+      float t = (r - 0.95) / 0.28;
+      float dhdr = (r < 1.0 ? 0.56 * r : 0.0) - 0.06 * exp(-t * t) * 2.0 * t / 0.28;
+      float vis = 1.0 - smoothstep(R * 0.2, R * 0.7, fw);
+      grad += (dl > 1e-4 ? dv / dl : vec2(0.0)) * dhdr * vis;
+      if (r < bestR) {
+        bestR = r;
+        bestSize = R;
+        bestWet = bfHash(c, salt + 4u) < flooded ? 1.0 : 0.0;
+      }
+    }
+  }
+}
+`;
+
 /**
  * Standard PBR material with procedural splat shading injected.
  *
- * Colour is blended from beach/grass/scree/rock/snow by elevation and slope,
- * broken up with noise at two scales. Doing it in the shader rather than with
- * vertex colours means the detail survives at any LOD, and keeping it a
- * MeshStandardMaterial means it still receives shadows and image-based lighting.
+ * The countryside is blended from beach, grass, scree, rock and snow by
+ * elevation and slope; farmland, woods, roads and aerodromes come in on
+ * per-vertex attributes; and over all of it, keyed to the front's curve, the
+ * battlefield: churned mud, trenches, wire and shell holes, fading out through
+ * a belt of cratered fields into the intact country behind.
  */
 function createTerrainMaterial(
   styleUniforms: Record<string, { value: unknown }>,
@@ -497,17 +569,11 @@ function createTerrainMaterial(
     color: 0xffffff,
     roughness: 1.0,
     metalness: 0.0,
-    // A rough surface under a bright sky picks up a lot of ambient, which washes
-    // the landscape toward sky colour. Damping it lets the sun define the form.
     envMapIntensity: 0.42,
   });
 
   material.onBeforeCompile = (shader) => {
-    // Same uniform objects every compile, so updating them from TypeScript is
-    // immediately visible without touching the material.
-    Object.assign(shader.uniforms, styleUniforms);
-    // Haze that knows where the sun is. The ground is most of what is far
-    // away, so this is most of what aerial perspective is worth.
+    Object.assign(shader.uniforms, styleUniforms, frontUniforms);
     applyHaze(shader);
 
     shader.vertexShader = shader.vertexShader
@@ -520,8 +586,12 @@ function createTerrainMaterial(
          varying vec4 vSettled;
          attribute float aRiver;
          varying float vRiver;
-         attribute float aCity;
-         varying float vCity;`,
+         attribute float aForest;
+         varying float vForest;
+         attribute vec3 aRoad;
+         varying vec3 vRoad;
+         attribute vec4 aField;
+         varying vec4 vField;`,
       )
       .replace(
         '#include <beginnormal_vertex>',
@@ -529,7 +599,9 @@ function createTerrainMaterial(
          vTerrainNormal = normalize(mat3(modelMatrix) * objectNormal);
          vSettled = aSettled;
          vRiver = aRiver;
-         vCity = aCity;`,
+         vForest = aForest;
+         vRoad = aRoad;
+         vField = aField;`,
       )
       .replace(
         '#include <begin_vertex>',
@@ -544,15 +616,18 @@ function createTerrainMaterial(
          varying vec3 vTerrainPos;
          varying vec3 vTerrainNormal;
          varying vec4 vSettled;
-         varying float vCity;
          varying float vRiver;
+         varying float vForest;
+         varying vec3 vRoad;
+         varying vec4 vField;
          uniform vec3 uGrass;
          uniform vec3 uDry;
          uniform vec3 uRock;
          uniform float uSnowLine;
          uniform float uTreeLine;
          uniform float uStrata;
-         uniform float uWooded;
+         uniform float uBeach;
+         uniform vec3 uTimber;
 
          float tHash(vec2 p) {
            p = fract(p * vec2(123.34, 456.21));
@@ -572,14 +647,35 @@ function createTerrainMaterial(
            float s = 0.0, a = 0.5;
            for (int k = 0; k < 4; k++) { s += a * tNoise(p); p *= 2.03; a *= 0.5; }
            return s;
-         }`,
+         }
+         ${BATTLE_GLSL}`,
       )
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
+         // Shared with the roughness and normal chunks further down.
+         float bfWater = 0.0;
+         float bfMud = 0.0;
+         vec2 bfGrad = vec2(0.0);
          {
+           vec2 wp = vTerrainPos.xz;
            float h = vTerrainPos.y;
            float slope = 1.0 - clamp(vTerrainNormal.y, 0.0, 1.0);
+           // Metres per pixel: what every band and grid below antialiases against.
+           float fw = max(length(dFdx(wp)), length(dFdy(wp)));
+           // Desert worlds carry sand in the grass slot.
+           float sandy = smoothstep(0.35, 0.6, uGrass.r);
+
+           // Where this point stands relative to the lines.
+           float bfU = 1e5;
+           float bfSide = 1.0;
+           if (uFrontOn > 0.5) {
+             float fsl = bfFrontSlope(wp.x);
+             float dd = (wp.y - bfFrontZ(wp.x)) / sqrt(1.0 + fsl * fsl);
+             bfSide = dd >= 0.0 ? 1.0 : -1.0;
+             bfU = abs(dd) - (uFrontCfg.x + bfEdge(wp.x, bfSide));
+           }
+           float shatter = 1.0 - smoothstep(280.0, 1050.0, bfU);
 
            vec3 sand  = vec3(0.60, 0.53, 0.37);
            vec3 grass = uGrass;
@@ -588,208 +684,300 @@ function createTerrainMaterial(
            vec3 snow  = vec3(0.93, 0.95, 0.98);
 
            // NB: 'patch' is a reserved word in GLSL — don't name anything that.
-           float broad  = tFbm(vTerrainPos.xz * 0.0009);
-           float mottle = tFbm(vTerrainPos.xz * 0.004);
-           float fine   = tFbm(vTerrainPos.xz * 0.021);
+           float broad  = tFbm(wp * 0.0009);
+           float mottle = tFbm(wp * 0.004);
+           float fine   = tFbm(wp * 0.021);
 
            vec3 col = grass;
-           col = mix(sand, col, smoothstep(2.0, 34.0, h));
-           // Vegetation thins with altitude, so green gives way to dry scree
-           // high up rather than everything turning olive above the foothills.
-           // The band is per-world: a fixed one is right for a coastline and
-           // paints every high-altitude world uniformly grey.
+           col = mix(sand, col, smoothstep(uBeach - 10.0, uBeach, h));
            col = mix(col, dry, smoothstep(uTreeLine - 290.0, uTreeLine + 290.0, h + broad * 260.0));
            col = mix(col, rock, smoothstep(0.32, 0.66, slope + broad * 0.12));
-           // Snow line comes from the season. Keeping it high in summer matters:
-           // a low line turns every ridge white and flattens the scene out.
            float snowLine = smoothstep(uSnowLine, uSnowLine + 400.0, h + broad * 160.0)
                           * (1.0 - smoothstep(0.55, 0.85, slope));
            col = mix(col, snow, snowLine);
 
-           // Woodland.
-           //
-           // The one thing this landscape had a treeline for and no trees
-           // under: uTreeLine existed only to fade green to scree at
-           // altitude. Forests are painted onto the ground the same way the
-           // farmland already is — at cruise a tree is well under a pixel, and
-           // what actually reads from the air is the colour and the shape of
-           // the canopy, not the trunks.
-           //
-           // Free at runtime: no geometry, no vertex attribute, no CPU. The
-           // region shape reuses the noise already computed for the ground,
-           // plus one single-octave call — a quarter the cost of another fbm.
-           if (uWooded > 0.001) {
-             float stand = tNoise(vTerrainPos.xz * 0.0011 + 19.0);
-             // Ragged edges. A smooth threshold gives a forest with a shoreline
-             // drawn round it, which no forest has.
-             float canopy = smoothstep(0.40, 0.62, stand * 0.72 + broad * 0.5
-                                                  + mottle * 0.18 - 0.10);
-             // Off the beach, under the treeline, and off anything steep — the
-             // three rules that put woodland in valleys and on shoulders and
-             // leave the crags bare.
-             canopy *= smoothstep(4.0, 46.0, h);
-             canopy *= 1.0 - smoothstep(uTreeLine - 170.0, uTreeLine + 70.0,
-                                        h + broad * 200.0);
-             canopy *= 1.0 - smoothstep(0.24, 0.50, slope);
-             canopy *= 1.0 - snowLine;
-             // Cleared ground: fields and streets are painted after this and
-             // would cover it anyway, but fading it out first stops a
-             // half-strength field reading as olive soup.
-             canopy *= 1.0 - clamp(max(vSettled.x, vSettled.w), 0.0, 1.0) * 0.9;
-             canopy *= 1.0 - clamp(vCity, 0.0, 1.0);
-             canopy *= 1.0 - smoothstep(0.05, 0.40, vRiver);
-
-             // Conifer dark, pulled a little towards the world's own green so
-             // the same forest belongs on ten different palettes.
-             vec3 timber = mix(uGrass * 0.52, vec3(0.050, 0.094, 0.054), 0.62);
-             // Clumping, so the canopy has depth rather than being a flat wash.
-             float clump = 0.74 + 0.44 * fine + 0.24 * mottle;
-             col = mix(col, timber * clump, canopy * uWooded * 0.94);
-           }
-
-           // Horizontal rock banding for canyon country: alternating warm and
-           // cool strata, keyed to absolute height so the bands stay level and
-           // line up across the whole gorge the way real sedimentary layers do.
            if (uStrata > 0.0) {
              float band = 0.5 + 0.5 * sin(h * 0.0555 + broad * 1.4);
              col = mix(col, col * vec3(1.22, 0.80, 0.62), uStrata * band * 0.5);
            }
 
-           // Farmland around villages. This — not the buildings — is what makes
-           // a settlement visible from cruise: houses are 10 m across and two
-           // pixels wide from up there, while cleared fields are hundreds of
-           // metres of colour. Two tones split by a mid-scale noise read as a
-           // patchwork of plots rather than one flat disc of paint.
-           // The ordinary village's belt: the original, and still the right
-           // thing for a small one. Soft plots split by a mid-scale noise,
-           // close to the surrounding vegetation in brightness and different
-           // in hue — a ring of cultivated colour that carries from cruise
-           // without pretending to be a surveyed patchwork.
+           // The ordinary village's belt of soft plots.
            if (vSettled.w > 0.001) {
-             // A narrow band gives hard-edged plots. A soft gradient just reads
-             // as a smudge and disappears into the haze at any useful range.
-             float plots = smoothstep(0.45, 0.55, tFbm(vTerrainPos.xz * 0.011));
-             // Ploughed earth and pasture, kept close to the surrounding
-             // vegetation in *brightness* and different in *hue*. Lifting the
-             // luminance instead reads as bleached ground, not as fields.
+             float plots = smoothstep(0.45, 0.55, tFbm(wp * 0.011));
              vec3 stubble = uDry * 0.78;
              vec3 crop    = uGrass * 1.55;
-             // Fields stop where the ground steepens. A generous slope limit
-             // paints crops up the sides of hills, which stops reading as
-             // farmland and starts reading as bleached rock.
              col = mix(col, mix(stubble, crop, plots),
                        vSettled.w * (1.0 - smoothstep(0.08, 0.22, slope)));
            }
 
-           // The field village's patchwork, on top.
+           // The field village's hedged patchwork, in the village's own grid.
+           // Not \`out\`, \`half\` or \`patch\`: all reserved in GLSL.
            if (vSettled.x > 0.001) {
-             // Fields, laid out in the village's own grid.
-             //
-             // This was a noise threshold, and noise cannot make a corner —
-             // it gave soft blobs of two colours, which reads as mottled grass
-             // rather than as farmland. What says "cultivated" from the air is
-             // straight boundaries meeting at right angles, so the plots are a
-             // literal grid in the frame the village's street runs along. The
-             // next village over has its own angle, so the country does not
-             // come out as one continuous graph paper.
-             //
-             // Decided per fragment from interpolated local coordinates, never
-             // per vertex: a ninety-metre field on a mesh whose vertices are
-             // ten metres apart would otherwise break into dashes, which is
-             // the same wall a thin feature always hits here.
-             // Not \`out\`: that is a storage qualifier in GLSL, and naming a
-             // float after it fails to compile — which takes the whole terrain
-             // down, since the surface has no other material. The same trap as
-             // \`half\` and \`patch\`, and this one was caught by the shader
-             // watch in the offline check rather than by looking at a flat
-             // white world.
              float afield = clamp(length(vSettled.yz) / 1400.0, 0.0, 1.0);
-             // Small closes by the houses, big fields further out — infield and
-             // outfield, which is how settlements actually grew.
              vec2 acre = vec2(74.0 + afield * 130.0, 108.0 + afield * 190.0);
-             // Warped before it is gridded, so the boundaries bend.
-             //
-             // A grid in a rotated frame is still a perfect grid, and from the
-             // air that reads as printed rather than as ploughed — real field
-             // edges follow a stream, a contour or somebody's argument from
-             // four centuries ago. Displacing the coordinates by a slow noise
-             // first costs two lookups and bends every boundary in the belt
-             // without moving any of them far.
              vec2 wander = vec2(tFbm(vSettled.yz * 0.0021 + 4.0),
                                 tFbm(vSettled.yz * 0.0021 + 19.0)) - 0.5;
              vec2 grid = (vSettled.yz + wander * 150.0) / acre;
              vec2 plot = floor(grid);
              vec2 within = fract(grid);
-
-             // A crop per plot, from a hash of which plot it is.
              float pick = tHash(plot * 0.37 + 3.1);
-             // Closer together than they were. Three strongly separated tones
-             // made a chessboard; farmland is mostly variations on one green
-             // with the odd bare field among it.
              vec3 stubble  = uDry * 0.86;
              vec3 growing  = uGrass * 1.34;
              vec3 ploughed = uDry * 0.62;
              vec3 tone = pick < 0.36 ? stubble : (pick < 0.78 ? growing : ploughed);
-             // Never two identical plots side by side, and never a flat swatch.
              tone *= 0.9 + 0.2 * tHash(plot * 1.7 + 8.3);
              tone = mix(tone, tone * 1.12, mottle);
-
-             // Hedgerow. The margin is most of what makes a field a field: a
-             // grid of colours with no boundaries reads as a quilt, and a grid
-             // with dark edges reads as land somebody works.
              vec2 margin = abs(within - 0.5);
              float hedge = max(smoothstep(0.445, 0.5, margin.x),
                                smoothstep(0.455, 0.5, margin.y));
              tone = mix(tone, uGrass * 0.52, hedge * 0.55);
-
-             // Not every plot is worked. Roughly a third is left as it was,
-             // which is what breaks the belt up into farmland *among* country
-             // rather than a solid sheet of it reaching to a hard circular
-             // edge — and it is most of what makes there be fewer fields
-             // without making the farmed ones smaller.
              float worked = smoothstep(0.26, 0.46, tHash(plot * 0.91 + 5.7));
-
-             // Fields stop where the ground steepens. A generous slope limit
-             // paints crops up the sides of hills, which stops reading as
-             // farmland and starts reading as bleached rock.
-             // Held short of full strength so the ground it is laid over still
-             // shows through: at full mix a field is a flat swatch of paint.
              col = mix(col, tone,
                        vSettled.x * worked * 0.82
                        * (1.0 - smoothstep(0.08, 0.22, slope)));
            }
 
+           // Woods, from the same forest cover the 3D trees stand on. Near
+           // the lines they are not woods any more.
+           {
+             float canopy = smoothstep(0.10, 0.48, vForest + (fine - 0.5) * 0.3);
+             float clump = 0.74 + 0.44 * fine + 0.24 * mottle;
+             col = mix(col, uTimber * clump, canopy * (1.0 - shatter) * 0.94);
+           }
+
            // Patchiness at a scale that still reads from altitude.
            col *= 0.82 + 0.30 * mottle + 0.14 * fine;
 
-           // Rivers. Applied after the patchiness, so the water is smooth rather
-           // than carrying the ground's mottling through it. There is no second
-           // water surface anywhere: the channel is terrain, shaded and polished
-           // until it reads as water — which is the only way it can work in a
-           // valley 1200 m above the sea, where the ocean plane cannot reach.
+           // Rivers and canals: terrain shaded and polished until it reads as water.
            col = mix(col, vec3(0.030, 0.062, 0.072), smoothstep(0.05, 0.48, vRiver));
 
-           // The island's two surfaces, carried on one signed attribute: built
-           // ground above zero, parkland below it.
-           if (vCity > 0.001) {
-             // Asphalt and concrete, with the avenue grid scored into it so the
-             // streets read from the air even where the towers themselves have
-             // become too small to resolve.
-             vec2 blk = vTerrainPos.xz / vec2(276.0, 92.0);
-             vec2 g = abs(fract(blk) - 0.5);
-             float road = max(smoothstep(0.42, 0.5, g.x), smoothstep(0.40, 0.5, g.y));
-             // Grey, not black. This was 0.05 — darker than wet tarmac at
-             // night — and from a distance, before the buildings themselves
-             // stream in, it read as a hole burnt in the landscape rather than
-             // as a city. A city seen from miles away is a pale grey-brown
-             // smudge, and it has haze over it like everything else that far
-             // off, which near-black defeats.
-             vec3 asphalt = mix(vec3(0.185, 0.183, 0.184), vec3(0.245, 0.238, 0.228), road);
-             col = mix(col, asphalt, vCity * 0.78);
-           } else if (vCity < -0.001) {
-             vec3 park = mix(vec3(0.055, 0.115, 0.042), vec3(0.085, 0.150, 0.055), mottle);
-             col = mix(col, park, -vCity * 0.95);
+           // Roads: pale, dusty, a darker verge either side. Only where every
+           // vertex of the triangle agreed there was a road near, or a sign
+           // flip between two unrelated roads would draw a phantom one.
+           if (vRoad.y > 0.985) {
+             float rw = vRoad.z;
+             float along = 1.0 - smoothstep(-20.0, 260.0, -bfU);
+             float fade = smoothstep(-10.0, 240.0, bfU);
+             float cov = bfLine(abs(vRoad.x), rw, fw) * fade;
+             float verge = max(0.0, bfLine(abs(vRoad.x), rw + 2.6, fw) * fade - cov);
+             vec3 roadCol = mix(uDry * 1.2 + 0.035, vec3(0.50, 0.48, 0.43), 0.45);
+             roadCol = mix(roadCol, uGrass * 1.1, sandy * 0.5);
+             col = mix(col, col * 0.78, verge * 0.6);
+             col = mix(col, roadCol * (0.9 + 0.16 * fine), cov);
+             // Wheel ruts, up close.
+             float rut = bfLine(abs(abs(vRoad.x) - rw * 0.45), 0.25, fw) * cov;
+             col = mix(col, col * 0.8, rut * 0.6);
+             along = along;
            }
+
+           // Aerodromes: a mown landing ground with its marks, in the field's
+           // own frame so the lines are straight at any LOD.
+           if (vField.z > 1.0) {
+             float al = vField.x;
+             float ri = vField.y;
+             float L = vField.z;
+             float W = vField.w;
+             float inField = (1.0 - smoothstep(L - 30.0, L + 20.0, abs(al)))
+                           * (1.0 - smoothstep(W - 25.0, W + 20.0, abs(ri)));
+             vec3 mown = mix(uGrass * 1.3 + vec3(0.012, 0.02, 0.0), uDry * 1.08, sandy);
+             float stripeVis = 1.0 - smoothstep(3.0, 9.0, fw);
+             float stripe = smoothstep(0.4, 0.6, abs(fract(ri / 30.0) - 0.5) * 2.0);
+             mown *= mix(1.0, 0.9 + 0.16 * stripe, stripeVis);
+             // Wheel-worn lanes along the run, and a trodden apron by the hangars.
+             float lanes = bfLine(abs(abs(ri) - W * 0.3), 7.0, fw) * 0.28;
+             mown = mix(mown, uDry * 0.9, lanes);
+             col = mix(col, mown, inField * 0.9);
+             float apron = (1.0 - smoothstep(20.0, 45.0, abs(ri + W + 20.0)))
+                         * (1.0 - smoothstep(130.0, 190.0, abs(al + L * 0.55 - 60.0)));
+             col = mix(col, uDry * (0.78 + 0.2 * fine), apron * 0.75);
+             // The marks: a circle in the middle and a landing T at the downwind end.
+             float ring = bfLine(abs(length(vec2(al, ri)) - 20.0), 1.2, fw);
+             float tX = al + L * 0.6;
+             float stem = bfLine(abs(ri), 1.7, fw) * step(-28.0, tX) * step(tX, 0.0);
+             float bar = bfLine(abs(tX), 1.7, fw) * step(abs(ri), 14.0);
+             float marks = max(ring, max(stem, bar));
+             col = mix(col, vec3(0.80, 0.79, 0.74), marks * inField);
+           }
+
+           // ------------------------------------------------ the battlefield
+           if (uFrontOn > 0.5 && bfU < 3200.0) {
+             float craters = uFrontCfg.y;
+             float chalk = uFrontCfg.z;
+             float flooded = uFrontCfg.w;
+             float u = bfU;
+             float s = wp.x;
+             float steep = smoothstep(0.42, 0.72, slope);
+             float lowNoise = tFbm(wp * 0.011);
+
+             // How churned: all of no-man's-land, ragged out across the trench belt.
+             float churn = 1.0 - smoothstep(-40.0, 380.0, u + (lowNoise - 0.5) * 300.0);
+             churn *= 1.0 - steep * 0.6;
+             // Behind that, the fields gone to rank grass and thistle.
+             float blight = 1.0 - smoothstep(250.0, 1900.0, u + (mottle - 0.5) * 600.0);
+
+             vec3 soil = mix(vec3(0.15, 0.125, 0.095), uDry * 0.62, 0.3 + 0.6 * sandy);
+             vec3 dark = soil * vec3(0.5, 0.5, 0.54);
+             vec3 chalkC = vec3(0.62, 0.61, 0.56);
+             vec3 spoil = mix(soil * 1.6, chalkC, chalk);
+             spoil = mix(spoil, uGrass * 1.08, sandy);
+             dark = mix(dark, uGrass * 0.62, sandy * 0.6);
+
+             float clodVis = 1.0 - smoothstep(0.25, 1.2, fw);
+             float c1 = tFbm(wp * 0.075);
+             float c2 = tFbm(wp * 0.6);
+             vec3 churned = mix(dark, soil, smoothstep(0.32, 0.72, c1));
+             churned = mix(churned, spoil,
+               smoothstep(0.6, 0.78, c2) * (0.25 + 0.45 * chalk) * clodVis
+               + smoothstep(0.55, 0.8, c1) * chalk * 0.3);
+             churned *= mix(1.0, 0.82 + 0.36 * tNoise(wp * 2.1), clodVis);
+
+             vec3 weeds = mix(col, mix(uDry * 0.78, uGrass * 0.85, 0.45), 0.6);
+             col = mix(col, weeds, blight * 0.75);
+             col = mix(col, churned, churn);
+             bfMud = churn;
+
+             // The woods near the line: stumps standing in the mud.
+             float woodF = smoothstep(0.08, 0.45, vForest) * shatter;
+             if (woodF > 0.01) {
+               col = mix(col, mix(churned, vec3(0.19, 0.18, 0.16), 0.35), woodF * 0.55);
+               vec2 sc = floor(wp / 3.4);
+               ivec2 ic = ivec2(sc);
+               vec2 so = (sc + 0.5 + (vec2(bfHash(ic, 506u), bfHash(ic, 507u)) - 0.5) * 0.6) * 3.4;
+               float stump = bfLine(length(wp - so), 0.4, fw) * step(bfHash(ic, 505u), 0.5);
+               col = mix(col, vec3(0.045, 0.04, 0.035), stump * woodF);
+             }
+
+             // ---- trenches: fire, support and reserve lines, the
+             // communication trenches zig-zagging back, and saps out into
+             // no-man's-land.
+             vec3 q = bfSide > 0.0 ? uWobHome : uWobFar;
+             float sP = s + q.x * 37.0;
+             float uf = u - ${f1(C.FIRE_BACK)};
+             float dFire = bfCrenel(sP, uf, 25.0, 3.4, 0.64);
+             float us = u - (165.0 + 28.0 * sin(s * 0.0023 + q.y) + 12.0 * sin(s * 0.0071 + q.z));
+             float dSup = bfCrenel(sP * 1.13 + 11.0, us, 21.0, 2.6, 0.6);
+             float ur = u - (540.0 + 70.0 * sin(s * 0.0014 + q.z) + 25.0 * sin(s * 0.0053 + q.x));
+             float dRes = bfCrenel(sP * 0.9 + 5.0, ur, 34.0, 4.0, 0.5);
+
+             float dComm = 1e5;
+             float ci = floor(s / 260.0);
+             for (int k = -1; k <= 1; k++) {
+               float cc = ci + float(k);
+               ivec2 ic = ivec2(int(cc), bfSide > 0.0 ? 1 : 2);
+               if (bfHash(ic, uint(707.0 + uFrontSalt)) > 0.82) continue;
+               float s0 = (cc + 0.2 + 0.6 * bfHash(ic, uint(708.0 + uFrontSalt))) * 260.0;
+               float uEnd = 380.0 + 1100.0 * bfHash(ic, uint(709.0 + uFrontSalt));
+               if (u < -2.0 || u > uEnd) continue;
+               float bend = 24.0 * sin(u * 0.0045 + cc * 1.7) + 10.0 * sin(u * 0.013 + cc);
+               dComm = min(dComm, bfZigzag(s - s0 - bend, u, 30.0, 6.0));
+             }
+
+             float dSap = 1e5;
+             float dPost = 1e5;
+             {
+               float cs = floor(s / 150.0);
+               ivec2 ic = ivec2(int(cs), bfSide > 0.0 ? 3 : 4);
+               if (bfHash(ic, uint(711.0 + uFrontSalt)) < 0.6) {
+                 float s0 = (cs + 0.3 + 0.4 * bfHash(ic, uint(712.0 + uFrontSalt))) * 150.0;
+                 float len = 18.0 + 30.0 * bfHash(ic, uint(713.0 + uFrontSalt));
+                 dSap = length(vec2(s - s0, uf - clamp(uf, -len, 0.0)));
+                 dPost = length(vec2(s - s0, uf + len));
+               }
+             }
+
+             float tv = (1.0 - steep) * (1.0 - smoothstep(1500.0, 1700.0, u)) * smoothstep(0.5, 2.5, h);
+             if (tv > 0.001) {
+               vec3 cut = mix(vec3(0.028, 0.024, 0.02), dark * 0.4, 0.3);
+               vec3 spoilT = spoil * (0.94 + 0.12 * c2);
+               float spoilW = 2.6 + 1.6 * chalk;
+               float sp = max(max(bfLine(dSup, 1.0 + spoilW * 0.85, fw), bfLine(dRes, 0.9 + spoilW * 0.7, fw)),
+                              max(bfLine(dComm, 0.8 + spoilW * 0.6, fw), bfLine(dFire, 1.15 + spoilW, fw)));
+               sp = max(sp, max(bfLine(dSap, 0.7 + spoilW * 0.5, fw), bfLine(dPost, 2.4 + spoilW * 0.6, fw)));
+               float ct = max(max(bfLine(dSup, 1.0, fw), bfLine(dRes, 0.9, fw)),
+                              max(bfLine(dComm, 0.75, fw), bfLine(dFire, 1.15, fw)));
+               ct = max(ct, max(bfLine(dSap, 0.65, fw), bfLine(dPost, 1.8, fw)));
+               col = mix(col, spoilT, sp * tv * 0.9);
+               col = mix(col, cut, ct * tv);
+               bfWater = max(bfWater, ct * tv * smoothstep(0.4, 0.9, flooded) * 0.85);
+             }
+
+             // ---- wire: two belts in front of the fire trench, a grey-brown
+             // hatch of pickets and coils.
+             float beltA = 1.0 - smoothstep(8.0, 11.0, abs(u + 24.0 + 5.0 * sin(s * 0.013 + q.x)));
+             float beltB = 1.0 - smoothstep(4.0, 6.5, abs(u + 58.0 + 6.0 * sin(s * 0.009 + q.y)));
+             float belt = max(beltA, beltB * 0.8) * (1.0 - steep) * smoothstep(0.5, 2.5, h);
+             if (belt > 0.001) {
+               float hA = bfLine(abs(fract((s + u) / 2.3) - 0.5) * 2.3, 0.13, fw);
+               float hB = bfLine(abs(fract((s - u) / 2.9) - 0.5) * 2.9, 0.13, fw);
+               float pick = bfLine(length(fract(wp / 3.0) - 0.5) * 3.0, 0.22, fw);
+               vec3 wireCol = vec3(0.13, 0.115, 0.10);
+               col = mix(col, wireCol, belt * clamp(0.2 + 0.75 * max(max(hA, hB), pick), 0.0, 1.0));
+             }
+
+             // ---- shell holes: heavy, field-gun and small, densest on the
+             // line and thinning out to the odd hole in a far field.
+             float dens = bfDensity(u) * craters;
+             vec3 avgHole = mix(dark, spoil, 0.35);
+             float farFade = smoothstep(3.0, 14.0, fw);
+             col = mix(col, avgHole, dens * 0.3 * farFade);
+             if (dens > 0.004 && farFade < 0.999) {
+               float bestR = 9.0;
+               float bestWet = 0.0;
+               float bestSize = 0.0;
+               bfCraters(wp, ${f1(C.C1)}, ${f1(C.SALT_C1)}, 0.9, 0.2, 0.25, dens, flooded, fw,
+                         bestR, bestWet, bestSize, bfGrad);
+               bfCraters(wp, ${f1(C.C2)}, ${f1(C.SALT_C2)}, 1.0, 0.18, 0.26, dens, flooded, fw,
+                         bestR, bestWet, bestSize, bfGrad);
+               if (fw < 1.0 && u < 700.0) {
+                 bfCraters(wp, 5.5, 404.0, 1.0, 0.16, 0.26, dens * (1.0 - smoothstep(0.0, 700.0, u)),
+                           flooded * 0.5, fw, bestR, bestWet, bestSize, bfGrad);
+               }
+               if (bestR < 1.7) {
+                 float vis = (1.0 - smoothstep(bestSize * 0.3, bestSize * 1.1, fw)) * (1.0 - steep * 0.7);
+                 float bowl = 1.0 - smoothstep(0.8, 0.96, bestR);
+                 float rim = smoothstep(0.74, 0.92, bestR) * (1.0 - smoothstep(1.02, 1.28, bestR));
+                 float ejecta = smoothstep(1.0, 1.18, bestR) * (1.0 - smoothstep(1.25, 1.7, bestR));
+                 vec3 bowlCol = mix(dark * 0.75, soil * 0.95, bestR * bestR);
+                 vec3 cc = col;
+                 cc = mix(cc, spoil, ejecta * (0.3 + 0.35 * chalk) * smoothstep(0.35, 0.75, c2 + 0.25));
+                 cc = mix(cc, spoil * 1.04, rim * 0.8);
+                 cc = mix(cc, bowlCol, bowl);
+                 float pool = bestWet * (1.0 - smoothstep(0.5, 0.6, bestR));
+                 cc = mix(cc, dark * 0.55, bestWet * (1.0 - smoothstep(0.58, 0.74, bestR)) * 0.8);
+                 col = mix(col, cc, vis);
+                 bfWater = max(bfWater, pool * vis);
+               }
+             }
+
+             // ---- mine craters: the handful of enormous ones.
+             if (u < 90.0 && craters > 0.0) {
+               float mc = floor(wp.x / ${f1(C.MINE_CELL)});
+               uint ms = uint(${f1(C.SALT_MINE)} + uFrontSalt);
+               int im = int(mc);
+               if (bfHash(ivec2(im, 0), ms) < 0.38 * craters) {
+                 float mx = (mc + 0.2 + 0.6 * bfHash(ivec2(im, 1), ms)) * ${f1(C.MINE_CELL)};
+                 float across = (bfHash(ivec2(im, 2), ms) - 0.5) * uFrontCfg.x;
+                 float mr = 20.0 + 16.0 * bfHash(ivec2(im, 3), ms);
+                 float msl = bfFrontSlope(mx);
+                 vec2 mcen = vec2(mx, bfFrontZ(mx) + across * sqrt(1.0 + msl * msl));
+                 vec2 dv = wp - mcen;
+                 float r = length(dv) / mr;
+                 if (r < 2.3) {
+                   float t = (r - 0.95) / 0.28;
+                   float dhdr = (r < 1.0 ? 0.68 * r : 0.0) - 0.12 * exp(-t * t) * 2.0 * t / 0.28;
+                   bfGrad += normalize(dv + 1e-4) * dhdr;
+                   float lip = smoothstep(0.7, 0.95, r) * (1.0 - smoothstep(1.1, 2.2, r + (c1 - 0.5) * 0.5));
+                   col = mix(col, spoil * 1.08, lip * 0.9);
+                   col = mix(col, mix(dark * 0.7, soil, r * r), 1.0 - smoothstep(0.8, 0.95, r));
+                   bfWater = max(bfWater, (1.0 - smoothstep(0.42, 0.5, r)) * step(0.3, flooded));
+                 }
+               }
+             }
+           }
+
+           // Standing water: shell holes, flooded trenches. Dark, and the
+           // roughness chunk polishes it so it takes the sky.
+           col = mix(col, vec3(0.022, 0.03, 0.034), bfWater);
            diffuseColor.rgb *= col;
          }`,
       )
@@ -797,17 +985,22 @@ function createTerrainMaterial(
         '#include <normal_fragment_begin>',
         `#include <normal_fragment_begin>
          {
-           // Fine surface relief the geometry is far too coarse to carry. Faded
-           // out with distance, otherwise it aliases into shimmer on far slopes.
-           // Water is smooth; the ground relief must not crawl across it.
+           // Crater bowls and rims, lit properly: the slope of each bowl added
+           // to the world normal and taken back into view space.
+           if (dot(bfGrad, bfGrad) > 1e-6) {
+             vec3 nW = normalize(vTerrainNormal);
+             nW = normalize(nW + vec3(-bfGrad.x, 0.0, -bfGrad.y) * (1.0 - bfWater));
+             normal = normalize((viewMatrix * vec4(nW, 0.0)).xyz);
+           }
+           // Fine surface relief the geometry is far too coarse to carry.
            float detailFade = (1.0 - smoothstep(600.0, 4000.0, length(vViewPosition)))
-                            * (1.0 - smoothstep(0.05, 0.4, vRiver));
+                            * (1.0 - smoothstep(0.05, 0.4, vRiver)) * (1.0 - bfWater);
            if (detailFade > 0.001) {
              vec2 p = vTerrainPos.xz * 0.06;
              float n0 = tFbm(p);
              float nx = tFbm(p + vec2(0.15, 0.0));
              float nz = tFbm(p + vec2(0.0, 0.15));
-             vec3 bump = vec3(n0 - nx, 0.0, n0 - nz) * 5.0 * detailFade;
+             vec3 bump = vec3(n0 - nx, 0.0, n0 - nz) * (5.0 + bfMud * 4.0) * detailFade;
              normal = normalize(normal + bump);
            }
          }`,
@@ -817,20 +1010,19 @@ function createTerrainMaterial(
         `#include <roughnessmap_fragment>
          {
            float slope = 1.0 - clamp(vTerrainNormal.y, 0.0, 1.0);
-           // Rock reads harder than vegetation; snow is smoother still.
            roughnessFactor = mix(0.96, 0.78, smoothstep(0.3, 0.7, slope));
            roughnessFactor = mix(roughnessFactor, 0.55,
              smoothstep(uSnowLine - 380.0, uSnowLine, vTerrainPos.y));
-           // Low roughness is most of what sells a river: it lets the channel
-           // pick up the sky through the environment map, the same way the sea
-           // does, so it reads as water rather than as dark paint.
+           // Wet mud has a sheen; water takes the sky.
+           roughnessFactor = mix(roughnessFactor, 0.7, bfMud * uFrontCfg.w);
            roughnessFactor = mix(roughnessFactor, 0.09, smoothstep(0.06, 0.5, vRiver));
+           roughnessFactor = mix(roughnessFactor, 0.06, bfWater);
          }`,
       );
   };
 
   // Any change to the injected source needs a distinct key or three reuses a
   // stale compiled program.
-  material.customProgramCacheKey = () => 'terrain-splat-v10';
+  material.customProgramCacheKey = () => 'terrain-splat-v11-front';
   return material;
 }

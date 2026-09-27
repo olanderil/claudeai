@@ -3,7 +3,7 @@ import { frontZ } from '../world/Front';
 import { Mode, headingTo, type ModeConfig, type ModeHost, type Report } from './Mode';
 import type { Battle } from '../combat/Battle';
 import type { Plane } from '../combat/Plane';
-import { makeZeppelin, type Target } from '../combat/Targets';
+import { makeGroundTarget, makeZeppelin, type Target } from '../combat/Targets';
 import type { Team } from '../combat/Types';
 
 /**
@@ -315,6 +315,12 @@ class Intercept extends Mission {
       this.host.notify('Bombers reported', 'heading for our aerodrome', 4);
     }
     this.wingmen(1, 0.55);
+    // Searchlights along our side of the line, to pick the raiders out.
+    for (let i = 0; i < 5; i++) {
+      const sx = x + (i - 2) * 700 + rand(-150, 150);
+      const sz = frontZ(sx) + rand(900, 1800);
+      this.battle.addTarget(makeGroundTarget('searchlight', this.team, sx, this.battle.ground(sx, sz), sz, 0));
+    }
   }
   protected tick(dt: number): void {
     if (this.raider) {
