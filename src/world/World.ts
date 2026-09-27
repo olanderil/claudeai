@@ -7,7 +7,7 @@ import {
   Terrain, terrainHeight, setTerrainSeed, getTerrainSeed,
   setWorld as selectWorld, WORLD_PRESETS, type WorldPreset,
 } from './Terrain';
-import { fieldElevation, worldWooded } from './Worlds';
+import { fieldElevation } from './Worlds';
 import { fogCover } from './GroundFog';
 import { QUALITY_PRESETS, DEFAULT_QUALITY, type QualityPreset } from '../render/Quality';
 import { Ocean } from './Ocean';
@@ -511,7 +511,6 @@ export class World {
       strata: world.style.strata,
     }, { beach, timber, farm: world.farmland ?? 0.8, stony: world.style.stony ?? 0 });
     this.vegetation.setSeason(this.seasonIndex);
-    void worldWooded;
   }
 
   /**

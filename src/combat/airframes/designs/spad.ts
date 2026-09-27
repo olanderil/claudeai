@@ -104,7 +104,7 @@ export const spad: Design = {
     for (const side of [1, -1] as const) {
       for (const x of [0.2, 0.95]) {
         const a = upper.at(SI, x, false, side), b = lower.at(SI, x * (L_C / U_C) + 0.02, true, side);
-        woodStrut(k, b, a, 0.09, COL.wood, 0.3, 'wingU');
+        woodStrut(k, b, a, 0.09, COL.wood, 0.3, undefined);
         fitting(k, a); fitting(k, b);
         // Intermediate struts where the wires cross: the SPAD's "false two-bay".
         woodStrut(k, lower.at(SM, x * (L_C / U_C) + 0.02, true, side), upper.at(SM, x, false, side), 0.05, COL.wood, 0.3);
@@ -145,7 +145,7 @@ export const spad: Design = {
     const az = -0.78, r = 0.36;
     landingGear(k, {
       track: 1.5, y: axleY(az, GEAR, r), z: az, r, tyre: 0.042,
-      front: v3(0.3, -0.44, -1.05), rear: v3(0.33, -0.5, -0.2), apexX: 0.58, hit: 'fus',
+      front: v3(0.3, -0.44, -1.05), rear: v3(0.33, -0.5, -0.2), apexX: 0.58, hit: 'gear',
       strutCol: rgb('#2d2c28'), strutRegion: 'paint',
     });
     tailSkid(k, v3(0, -0.24, 3.15), v3(0, groundY(3.9, GEAR) + 0.01, 3.9), 0.13);

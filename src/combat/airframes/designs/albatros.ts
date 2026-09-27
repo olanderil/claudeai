@@ -114,7 +114,7 @@ export const albatros: Design = {
       const foot = lower.at(SI, 0.35, true, side);
       for (const x of [0.25, 1.15]) {
         const a = upper.at(SI, x, false, side);
-        woodStrut(k, foot, a, 0.085, COL.wood, 0.3, 'wingU');
+        woodStrut(k, foot, a, 0.085, COL.wood, 0.3, undefined);
         fitting(k, a);
       }
       fitting(k, foot);
@@ -152,7 +152,7 @@ export const albatros: Design = {
     const az = -0.95, r = 0.38;
     landingGear(k, {
       track: 1.7, y: axleY(az, GEAR, r), z: az, r, tyre: 0.045,
-      front: v3(0.28, -0.48, -1.35), rear: v3(0.3, -0.52, -0.45), apexX: 0.66, hit: 'fus',
+      front: v3(0.28, -0.48, -1.35), rear: v3(0.3, -0.52, -0.45), apexX: 0.66, hit: 'gear',
       strutCol: rgb('#2d2c28'), strutRegion: 'paint',
     });
     tailSkid(k, v3(0, -0.3, 3.5), v3(0, groundY(4.1, GEAR) + 0.01, 4.1), 0.12);

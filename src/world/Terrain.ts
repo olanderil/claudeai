@@ -679,6 +679,7 @@ function createTerrainMaterial(
          // Shared with the roughness and normal chunks further down.
          float bfWater = 0.0;
          float bfMud = 0.0;
+         float bfMown = 0.0;
          vec2 bfGrad = vec2(0.0);
          {
            vec2 wp = vTerrainPos.xz;
@@ -834,7 +835,7 @@ function createTerrainMaterial(
              if (turfVis > 0.0) {
                float t1 = tNoise(wp * 3.1);
                float t2 = tNoise(wp * 11.0 + 7.0);
-               col *= mix(1.0, 0.8 + 0.28 * t1 + 0.14 * t2, turfVis * (1.0 - bfMud));
+               col *= mix(1.0, 0.8 + 0.28 * t1 + 0.14 * t2, turfVis * (1.0 - bfMud) * 0.8);
              }
            }
 
@@ -881,8 +882,9 @@ function createTerrainMaterial(
                            * (1.0 - smoothstep(W - 25.0, W + 20.0, abs(ri)));
              vec3 mown = mix(uGrass * 1.3 + vec3(0.012, 0.02, 0.0), uDry * 1.08, sandy);
              float stripeVis = 1.0 - smoothstep(3.0, 9.0, fw);
-             float stripe = smoothstep(0.4, 0.6, abs(fract(ri / 30.0) - 0.5) * 2.0);
-             mown *= mix(1.0, 0.9 + 0.16 * stripe, stripeVis);
+             float stripe = smoothstep(0.35, 0.65, abs(fract(ri / 30.0) - 0.5) * 2.0);
+             mown *= mix(1.0, 0.86 + 0.24 * stripe, stripeVis);
+             bfMown = inField;
              // Wheel-worn lanes along the run, and a trodden apron by the hangars.
              float lanes = bfLine(abs(abs(ri) - W * 0.3), 7.0, fw) * 0.28;
              mown = mix(mown, uDry * 0.9, lanes);
@@ -1138,7 +1140,7 @@ function createTerrainMaterial(
              float n0 = tFbm(p);
              float nx = tFbm(p + vec2(0.15, 0.0));
              float nz = tFbm(p + vec2(0.0, 0.15));
-             vec3 bump = vec3(n0 - nx, 0.0, n0 - nz) * (5.0 + bfMud * 4.0) * detailFade;
+             vec3 bump = vec3(n0 - nx, 0.0, n0 - nz) * (5.0 + bfMud * 4.0) * (1.0 - bfMown * 0.75) * detailFade;
              normal = normalize(normal + bump);
            }
          }`,

@@ -84,7 +84,7 @@ export const dh4: Design = {
       for (const SI of [2.7, 5.45]) {
         for (const x of [0.25, 1.2]) {
           const a = upper.at(SI, x, false, side), b = lower.at(SI, x, true, side);
-          woodStrut(k, b, a, 0.1, COL.wood, 0.3, 'wingU');
+          woodStrut(k, b, a, 0.1, COL.wood, 0.3, undefined);
           fitting(k, a); fitting(k, b);
           rigWire(k, lower.at(inner, x, true, side), upper.at(SI - 0.05, x, false, side), true);
           rigWire(k, upper.at(inner, x, false, side), lower.at(SI - 0.05, x, true, side), false);
@@ -119,7 +119,7 @@ export const dh4: Design = {
     const az = -1.15, r = 0.43;
     landingGear(k, {
       track: 1.95, y: axleY(az, GEAR, r), z: az, r, tyre: 0.05,
-      front: v3(0.36, -0.56, -1.75), rear: v3(0.38, -0.6, -0.55), apexX: 0.78, hit: 'fus',
+      front: v3(0.36, -0.56, -1.75), rear: v3(0.38, -0.6, -0.55), apexX: 0.78, hit: 'gear',
     });
     tailSkid(k, v3(0, -0.24, 5.2), v3(0, groundY(5.85, GEAR) + 0.01, 5.85), 0.15);
 

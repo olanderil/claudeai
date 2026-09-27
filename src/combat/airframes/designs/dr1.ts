@@ -79,8 +79,8 @@ export const dr1: Design = {
     for (const side of [1, -1] as const) {
       const l = lower.at(SI, 0.4, true, side), m0 = middle.at(SI, 0.4, false, side), m1 = middle.at(SI, 0.4, true, side), u = upper.at(SI, 0.4, false, side);
       // Painted with the airframe, not varnished: the livery owns their colour.
-      woodStrut(k, l, m0, 0.2, COL.wood, 0.16, 'wingM', 'livery');
-      woodStrut(k, m1, u, 0.2, COL.wood, 0.16, 'wingU', 'livery');
+      woodStrut(k, l, m0, 0.2, COL.wood, 0.16, undefined, 'livery');
+      woodStrut(k, m1, u, 0.2, COL.wood, 0.16, undefined, 'livery');
       fitting(k, u); fitting(k, l);
       // Cabane: an inverted V each side from the longerons to the top wing.
       const top = upper.at(0.32, 0.4, false, side);
@@ -105,7 +105,7 @@ export const dr1: Design = {
     const az = -0.72, r = 0.37;
     landingGear(k, {
       track: 1.62, y: axleY(az, GEAR, r), z: az, r, tyre: 0.045,
-      front: v3(0.26, -0.44, -0.98), rear: v3(0.28, -0.5, -0.35), apexX: 0.6, hit: 'fus',
+      front: v3(0.26, -0.44, -0.98), rear: v3(0.28, -0.5, -0.35), apexX: 0.6, hit: 'gear',
       strutCol: rgb('#2f2e2a'), strutRegion: 'paint',
       axleWing: { chord: 0.46, region: at.region('axle', 'wing') },
     });

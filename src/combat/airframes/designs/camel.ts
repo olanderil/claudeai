@@ -106,7 +106,7 @@ export const camel: Design = {
     for (const side of [1, -1] as const) {
       for (const x of [0.22, 0.98]) {
         const a = upper.at(SI, x, false, side), b = lower.at(SI, x, true, side);
-        woodStrut(k, b, a, 0.085, COL.wood, 0.32, 'wingU');
+        woodStrut(k, b, a, 0.085, COL.wood, 0.32, undefined);
         fitting(k, a); fitting(k, b);
       }
       // Cabane: front and rear pairs from the top longerons to the centre section.
@@ -150,7 +150,7 @@ export const camel: Design = {
     const az = -0.62, r = 0.35;
     landingGear(k, {
       track: 1.52, y: axleY(az, GEAR, r), z: az, r, tyre: 0.04,
-      front: v3(0.3, -0.42, -0.72), rear: v3(0.33, -0.5, -0.08), apexX: 0.6, hit: 'fus',
+      front: v3(0.3, -0.42, -0.72), rear: v3(0.33, -0.5, -0.08), apexX: 0.6, hit: 'gear',
     });
     // The physics parks every scout with its CG 1.5 m up at 11°, which leaves
     // the tail higher than a real Camel's: a long sprung skid raked aft.

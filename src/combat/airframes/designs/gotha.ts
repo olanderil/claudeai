@@ -107,7 +107,7 @@ export const gotha: Design = {
             // Engine bearers: struts meet the nacelle top and bottom instead of spanning the gap.
             woodStrut(k, b, v3(side * NAC_X, NAC_Y - 0.4, b.z), 0.1, COL.wood, 0.3, 'wingL');
             woodStrut(k, v3(side * NAC_X, NAC_Y + 0.44, a.z), a, 0.1, COL.wood, 0.3, 'wingU');
-          } else woodStrut(k, b, a, 0.11, COL.wood, 0.3, 'wingU');
+          } else woodStrut(k, b, a, 0.11, COL.wood, 0.3, undefined);
           fitting(k, a); fitting(k, b);
           rigWire(k, lower.at(inner, x, true, side), upper.at(SI - 0.05, x + sweep * SI, false, side), true);
           rigWire(k, upper.at(inner, x + sweep * inner, false, side), lower.at(SI - 0.05, x, true, side), false);
@@ -158,7 +158,7 @@ export const gotha: Design = {
     }
     landingGear(k, {
       track: 0.9, y: -1.25, z: -4.0, r: 0.28, tyre: 0.04,
-      front: v3(0.3, -0.5, -4.35), rear: v3(0.35, -0.62, -3.5), apexX: 0.35, hit: 'fus',
+      front: v3(0.3, -0.5, -4.35), rear: v3(0.35, -0.62, -3.5), apexX: 0.35, hit: 'gear',
       strutCol: rgb('#3b3a33'), strutRegion: 'paint', node: 'noseWheels',
     });
     tailSkid(k, v3(0, -0.3, 6.3), v3(0, groundY(7.1, GEAR) + 0.01, 7.1), 0.2);
