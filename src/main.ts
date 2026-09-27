@@ -1330,6 +1330,17 @@ function boot(): void {
     },
   });
 
+  // The menu icon in the corner tools: the in-flight menu, with the main menu
+  // one click further — a single click never throws a sortie away.
+  const menuButton = document.getElementById('menu-button') as HTMLButtonElement | null;
+  menuButton?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menuButton.blur();
+    sfx.ui('select');
+    if (game.state === 'playing') pause(!paused);
+    else if (game.state === 'over') quitToMenu();
+  });
+
   // Fire with the left mouse button — except where dragging moves the camera.
   sceneCanvas.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || game.state !== 'playing' || paused) return;

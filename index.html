@@ -1161,6 +1161,7 @@
          same glass as the panels, a small tracked eyebrow, a light title, and
          the text kept to a comfortable measure. */
       #screens { position: fixed; inset: 0; z-index: 6; pointer-events: none; }
+      body:not(.started) #menu-button { display: none; }
       /* One card at a time: the main menu steps back while a screen is up. */
       #overlay #choose { transition: opacity 0.3s ease; }
       body.screen-open #overlay #choose { opacity: 0; pointer-events: none; }
@@ -1547,6 +1548,15 @@
     </div>
 
     <div id="corner-tools">
+      <!-- The in-flight menu: resume, restart, controls, back to the main menu.
+           Only while a sortie is on; the main menu is its own screen. -->
+      <button id="menu-button" class="icon-button" type="button"
+              title="Menu (Esc)" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4.5 7h15M4.5 12h15M4.5 17h9" />
+        </svg>
+      </button>
       <button id="radio" class="icon-button" type="button" aria-expanded="false"
               title="Radio" aria-label="Radio">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"

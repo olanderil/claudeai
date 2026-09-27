@@ -28,23 +28,29 @@ export interface Station {
 }
 
 /**
- * The nine channels that made the cut, from SomaFM — listener-supported, and it
- * publishes these direct stream links for exactly this kind of use.
+ * Ten channels for 1917: film scores, orchestras, the dance bands of the
+ * 1920s and 30s, jazz and Celtic pipes — and three of the jet sim's SomaFM
+ * channels that earned their place.
  *
- * In deliberate order rather than alphabetical: Mission Control first, because
- * it is the one that comes on by itself, then out through space and ambient to
- * the two with a pulse to them.
+ * All HTTPS, because a page served over HTTPS may not play an HTTP stream
+ * (browsers block it as mixed content). That rules out a few period stations
+ * that only broadcast over plain HTTP, Radio Dismuke among them.
+ *
+ * In deliberate order rather than alphabetical: the film scores first,
+ * because the first station is the one that comes on by itself, then the
+ * orchestras, the dance halls, and out to the ambient channels at the end.
  */
 export const STATIONS: Station[] = [
+  { name: 'Cinemix', blurb: 'Orchestral film scores', url: 'https://kathy.torontocast.com:1825/stream' },
+  { name: 'Radio Swiss Classic', blurb: 'Orchestral classics, no talk', url: 'https://stream.srg-ssr.ch/m/rsc_de/mp3_128' },
+  { name: 'France Musique', blurb: 'Debussy, Ravel and the French repertoire', url: 'https://icecast.radiofrance.fr/francemusiqueclassiqueplus-midfi.mp3' },
+  { name: 'BR-Klassik', blurb: 'Bavarian radio orchestras', url: 'https://dispatcher.rndfnk.com/br/brklassik/live/mp3/high' },
+  { name: 'Swing Street', blurb: '1920s–40s dance bands on 78s', url: 'https://s1.voscast.com:10413/stream' },
+  { name: 'FIP Jazz', blurb: 'Jazz, from New Orleans on', url: 'https://icecast.radiofrance.fr/fipjazz-midfi.mp3' },
+  { name: 'ThistleRadio', blurb: 'Celtic pipes and fiddles', url: 'https://ice5.somafm.com/thistle-128-mp3' },
   { name: 'Mission Control', blurb: 'NASA and explorers', url: 'https://ice5.somafm.com/missioncontrol-128-mp3' },
-  { name: 'SF 10-33', blurb: 'Ambient over city radio', url: 'https://ice5.somafm.com/sf1033-128-mp3' },
-  { name: 'Deep Space One', blurb: 'Deep space ambient', url: 'https://ice5.somafm.com/deepspaceone-128-mp3' },
-  { name: 'Synphaera', blurb: 'Modern space ambient', url: 'https://ice5.somafm.com/synphaera-128-mp3' },
-  { name: 'Drone Zone', blurb: 'Ambient textures', url: 'https://ice5.somafm.com/dronezone-128-mp3' },
-  { name: 'Dark Zone', blurb: 'The darker ambient', url: 'https://ice5.somafm.com/darkzone-128-mp3' },
   { name: 'Salad Classic', blurb: 'Early Groove Salad', url: 'https://ice5.somafm.com/gsclassic-128-mp3' },
   { name: 'Secret Agent', blurb: 'Jet-set lounge', url: 'https://ice5.somafm.com/secretagent-128-mp3' },
-  { name: 'Fluid', blurb: 'Instrumental hip hop', url: 'https://ice5.somafm.com/fluid-128-mp3' },
 ];
 
 export type RadioState = 'stopped' | 'tuning' | 'playing' | 'error';
