@@ -194,21 +194,28 @@ export class CombatHUD {
     const g = p.gun;
     const jammed = g.jam > 0;
     const col = jammed ? WARN : g.heat > 0.78 ? ACCENT : INK;
+    // In the cockpit the aircraft's own ring sight does this job; only the
+    // heat arc, the hit mark and the lead pip are drawn over it.
+    const own = !f.cockpit;
     ctx.beginPath();
     if (jammed) ctx.setLineDash([3, 4]);
-    ctx.arc(x, y, R, 0, Math.PI * 2);
-    this.stroke(col, 1.2);
-    ctx.setLineDash([]);
-    ctx.beginPath();
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1]] as const) {
-      ctx.moveTo(x + dx * R * 1.35, y + dy * R * 1.35);
-      ctx.lineTo(x + dx * R * 1.95, y + dy * R * 1.95);
+    if (own || jammed) {
+      ctx.arc(x, y, R, 0, Math.PI * 2);
+      this.stroke(col, 1.2);
     }
-    this.stroke(col, 1.2);
-    ctx.fillStyle = col;
-    ctx.beginPath();
-    ctx.arc(x, y, 1.6, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.setLineDash([]);
+    if (own) {
+      ctx.beginPath();
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1]] as const) {
+        ctx.moveTo(x + dx * R * 1.35, y + dy * R * 1.35);
+        ctx.lineTo(x + dx * R * 1.95, y + dy * R * 1.95);
+      }
+      this.stroke(col, 1.2);
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(x, y, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
     // Gun heat as an arc sweeping the ring.
     if (g.heat > 0.05 && !jammed) {
       ctx.beginPath();

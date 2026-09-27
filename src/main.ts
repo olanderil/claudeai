@@ -1193,6 +1193,8 @@ function boot(): void {
 
   /** Common to every way into the air. */
   function enterFlight(): void {
+    // Whatever way in, the titles are over.
+    endTitles();
     introRunning = false;
     paused = false;
     menus.hide();
@@ -1777,24 +1779,37 @@ function boot(): void {
   // Only in fullscreen — in a window the chrome is the way you drive the
   // thing — and never while a tab is open, because reading a panel of
   // settings is not the same as doing nothing.
+  //
+  // Flying, the same chrome also steps aside after a short while — but there
+  // only the pointer wakes it, because a pilot is on the keys the whole time
+  // and the tabs are wanted when the mouse goes looking for them.
   {
     const IDLE_AFTER = 5000;
+    const FLYING_IDLE_AFTER = 2500;
     let lastInput = performance.now();
+    let lastPointer = performance.now();
     const wake = (): void => {
       lastInput = performance.now();
       document.body.classList.remove('idle');
     };
+    const wakePointer = (): void => {
+      lastPointer = performance.now();
+      wake();
+    };
     // Passive: none of these are cancelled, and saying so keeps the listeners
     // off the critical path of a drag over the canvas.
-    for (const type of ['pointermove', 'pointerdown', 'wheel', 'keydown', 'touchstart'] as const) {
-      window.addEventListener(type, wake, { passive: true });
+    for (const type of ['pointermove', 'pointerdown', 'wheel', 'touchstart'] as const) {
+      window.addEventListener(type, wakePointer, { passive: true });
     }
+    window.addEventListener('keydown', wake, { passive: true });
     document.addEventListener('fullscreenchange', wake);
     window.setInterval(() => {
-      document.body.classList.toggle('idle',
-        document.fullscreenElement !== null
-        && !panel.isOpen
-        && performance.now() - lastInput >= IDLE_AFTER);
+      const now = performance.now();
+      const flying = game.state === 'playing' && !paused && !menus.isOpen && !input.usingMouse;
+      document.body.classList.toggle('flying', flying);
+      document.body.classList.toggle('idle', !panel.isOpen && (
+        (document.fullscreenElement !== null && now - lastInput >= IDLE_AFTER)
+        || (flying && now - lastPointer >= FLYING_IDLE_AFTER)));
     }, 250);
   }
 
