@@ -1,4 +1,4 @@
-import { canvas, canvasTexture, fbm, hash2, heightToNormal, noiseCanvas, rng, vnoise, type SkinAtlas, type SkinRegion } from './atlas';
+import { canvas, canvasTexture, fbm, heightToNormal, noiseCanvas, rng, vnoise, type SkinAtlas, type SkinRegion } from './atlas';
 import type { Fuselage } from './fuselage';
 import type * as THREE from 'three';
 
@@ -454,8 +454,10 @@ export interface FusMeta {
  * between them, most toward the trailing edge where nothing supports it;
  * fuselage fabric sags between stringers and is laced along the belly.
  */
-export function reliefNormalMap(atlas: SkinAtlas): THREE.Texture {
-  const S = atlas.size;
+export function reliefNormalMap(atlas: SkinAtlas, res = 0.5): THREE.Texture {
+  // Half resolution: the relief is broad (sag, tapes, seams) and this map is
+  // per type, resident for as long as the type is; it also builds 4× faster.
+  const S = Math.round(atlas.size * res);
   const H = new Float32Array(S * S);
   for (const r of atlas.regions.values()) {
     const m = r.meta as Partial<WingMeta & FusMeta>;
@@ -489,7 +491,7 @@ export function reliefNormalMap(atlas: SkinAtlas): THREE.Texture {
         if (te - x < 0.012) h += 0.0003;
         if (wm.hinge && s >= wm.hinge.s0 && s <= wm.hinge.s1 && Math.abs(x - wm.hinge.x(s)) < 0.006) h -= 0.0012;
         H[py * S + px] = h;
-      });
+      }, undefined, res);
     } else if (r.kind === 'fus' && m.fus) {
       const fm = m as FusMeta;
       const fus = fm.fus;
@@ -529,7 +531,7 @@ export function reliefNormalMap(atlas: SkinAtlas): THREE.Texture {
           if (Math.abs(v - info.sh) < 0.003) h -= 0.0005;
         }
         H[py * S + px] = h;
-      });
+      }, undefined, res);
     } else if (r.kind === 'cowl') {
       const lip = (r.meta.lip as number) ?? 0;
       atlas.forPixels(r, (px, py, u, v) => {
@@ -537,7 +539,7 @@ export function reliefNormalMap(atlas: SkinAtlas): THREE.Texture {
         if (Math.abs(v - lip) < 0.01) h += 0.0005;
         h += (vnoise(u * 30, v * 30, 9) - 0.5) * 0.00012; // hand-beaten sheet
         H[py * S + px] = h;
-      });
+      }, undefined, res);
     } else if (r.kind === 'disc') {
       atlas.forPixels(r, (px, py, u, v) => {
         const rr = Math.hypot(u, v);
@@ -545,10 +547,10 @@ export function reliefNormalMap(atlas: SkinAtlas): THREE.Texture {
         let h = -0.0015 * (1 - (rr / R) ** 2);
         if (Math.abs(rr - R * 0.93) < 0.008 && Math.sin(Math.atan2(v, u) * 60) > 0.3) h += 0.0006; // lacing
         H[py * S + px] = h;
-      });
+      }, undefined, res);
     }
   }
-  return canvasTexture(heightToNormal(H, S, S, atlas.scale, 2.2), false);
+  return canvasTexture(heightToNormal(H, S, S, atlas.scale * res, 3.2), false);
 }
 
 function smooth(a: number, b: number, x: number): number {
@@ -556,4 +558,3 @@ function smooth(a: number, b: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
-export { hash2 };

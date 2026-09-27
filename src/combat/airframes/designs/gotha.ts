@@ -26,8 +26,10 @@ const U_Y = 1.62, L_Y = -0.66;
 const NAC_X = 2.4, NAC_Y = 0.46;
 
 const KEYS: FusKey[] = [
-  { z: -4.5, w: 0.42, top: 0.46, bot: -0.55, sh: 0.0, nt: 3, nb: 4 },
-  { z: -3.6, w: 0.52, top: 0.56, bot: -0.68, sh: 0.12, nt: 3, nb: 6 },
+  { z: -4.72, w: 0.18, top: 0.2, bot: -0.3, sh: -0.04, nt: 2, nb: 2 },
+  { z: -4.55, w: 0.38, top: 0.4, bot: -0.5, sh: 0.0, nt: 2.4, nb: 2.8 },
+  { z: -4.1, w: 0.49, top: 0.52, bot: -0.64, sh: 0.06, nt: 2.8, nb: 4.5 },
+  { z: -3.4, w: 0.54, top: 0.57, bot: -0.7, sh: 0.16, nt: 3, nb: 6 },
   { z: -2.0, w: 0.56, top: 0.6, bot: -0.72, sh: 0.32, nt: 2.6, nb: 8 },
   { z: 0.0, w: 0.56, top: 0.58, bot: -0.72, sh: 0.34, nt: 2.4, nb: 8 },
   { z: 2.5, w: 0.5, top: 0.54, bot: -0.62, sh: 0.3, nt: 2.4, nb: 8 },
@@ -105,8 +107,8 @@ export const gotha: Design = {
           const a = upper.at(SI, x + sweep * SI, false, side), b = lower.at(SI, x, true, side);
           if (SI === NAC_X) {
             // Engine bearers: struts meet the nacelle top and bottom instead of spanning the gap.
-            woodStrut(k, b, v3(side * NAC_X, NAC_Y - 0.4, b.z), 0.1, COL.wood, 0.3, 'wingL');
-            woodStrut(k, v3(side * NAC_X, NAC_Y + 0.44, a.z), a, 0.1, COL.wood, 0.3, 'wingU');
+            woodStrut(k, b, v3(side * NAC_X, NAC_Y - 0.4, b.z), 0.1, COL.wood, 0.3);
+            woodStrut(k, v3(side * NAC_X, NAC_Y + 0.44, a.z), a, 0.1, COL.wood, 0.3);
           } else woodStrut(k, b, a, 0.11, COL.wood, 0.3, undefined);
           fitting(k, a); fitting(k, b);
           rigWire(k, lower.at(inner, x, true, side), upper.at(SI - 0.05, x + sweep * SI, false, side), true);
@@ -148,12 +150,12 @@ export const gotha: Design = {
       for (const dx of [-0.3, 0.3]) {
         // Tyre round a covered wheel; the tyre's outside radius is r, so it sits on the ground.
         const tyre = torus(r - 0.06, 0.06, k.n(32, 12, 8), k.n(10, 5, 3), COL.rubber).transform(new THREE.Matrix4().makeRotationY(Math.PI / 2)).transform(mat([cx + dx, ay, az]));
-        k.props(tyre, 'rubber', 'wheels', 'fus');
+        k.props(tyre, 'rubber', 'wheels', 'gear');
         k.props(cyl(r - 0.1, r - 0.1, -0.06, 0.06, k.n(24, 10, 6), rgb('#3a3c38')).transform(new THREE.Matrix4().makeRotationY(Math.PI / 2)).transform(mat([cx + dx, ay, az])), 'paint', 'wheels');
       }
       k.props(cyl(0.03, 0.03, -0.45, 0.45, 8, COL.darkSteel).transform(new THREE.Matrix4().makeRotationY(Math.PI / 2)).transform(mat([cx, ay, az])), 'steel');
       for (const [dz, dx] of [[-0.5, 0.25], [0.45, 0.25], [-0.5, -0.25], [0.45, -0.25]]) {
-        woodStrut(k, lower.at(NAC_X + dx, 0.5 + dz * 0.8, false, side as 1 | -1), v3(cx + dx * 0.6 * side, ay + 0.05, az), 0.09, rgb('#3b3a33'), 0.35, 'fus', 'paint');
+        woodStrut(k, lower.at(NAC_X + dx, 0.5 + dz * 0.8, false, side as 1 | -1), v3(cx + dx * 0.6 * side, ay + 0.05, az), 0.09, rgb('#3b3a33'), 0.35, 'gear', 'paint');
       }
     }
     landingGear(k, {
@@ -164,8 +166,8 @@ export const gotha: Design = {
     tailSkid(k, v3(0, -0.3, 6.3), v3(0, groundY(7.1, GEAR) + 0.01, 7.1), 0.2);
 
     // ---- crew: nose gunner, pilot, rear gunner
-    const noseRing = gunRing(k, { centre: v3(0, 0.5, -3.92), R: 0.4, gun: 'parabellum', yaw: 'noseYaw', pitch: 'nosePitch', flash: 'nflash', forward: true, eyeUp: 0.55, coat: rgb('#4a4a40') });
-    void noseRing;
+    // The nose gunner is posed facing forward; only the rear ring is animated.
+    gunRing(k, { centre: v3(0, 0.5, -3.92), R: 0.4, gun: 'parabellum', yaw: 'noseYaw', pitch: 'nosePitch', flash: 'nflash', forward: true, eyeUp: 0.55, coat: rgb('#4a4a40') });
     windscreen(k, v3(0, 0.66, -3.0), 0.5, 0.18, 0.4);
     k.node('cockpit', EYE, { flags: { cockpit: true } });
     instrumentBoard(k, FUS, -2.95, -0.05, 0.6, [

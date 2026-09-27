@@ -953,7 +953,10 @@ function createTerrainMaterial(
                vec2 sc = floor(wp / 3.4);
                ivec2 ic = ivec2(sc);
                vec2 so = (sc + 0.5 + (vec2(bfHash(ic, 506u), bfHash(ic, 507u)) - 0.5) * 0.6) * 3.4;
-               float stump = bfLine(length(wp - so), 0.4, fw) * step(bfHash(ic, 505u), 0.5);
+               // Painted stumps only where the 3D trunks have thinned out:
+               // up close they would be a visible lattice under the real ones.
+               float stump = bfLine(length(wp - so), 0.18 + 0.3 * bfHash(ic, 508u), fw) * step(bfHash(ic, 505u), 0.28)
+                           * smoothstep(0.25, 0.7, fw);
                col = mix(col, vec3(0.045, 0.04, 0.035), stump * woodF);
              }
 
@@ -975,8 +978,12 @@ function createTerrainMaterial(
                bfCraters(wp, ${f1(C.C2)}, ${f1(C.SALT_C2)}, 0.62, 0.18, 0.26, dens, wetShare, fw,
                          bestR, bestWet, bestSize, bfGrad);
                if (fw < 1.0 && u < 700.0) {
-                 bfCraters(wp, 5.5, 404.0, 0.55, 0.16, 0.26, dens * (1.0 - smoothstep(0.0, 700.0, u)),
-                           wetShare * 0.4, fw, bestR, bestWet, bestSize, bfGrad);
+                 // Two grids of small holes at unrelated pitches and a skew, so
+                 // neither lattice shows through.
+                 float sd = dens * (1.0 - smoothstep(0.0, 700.0, u));
+                 bfCraters(wp, 5.5, 404.0, 0.3, 0.12, 0.32, sd, wetShare * 0.4, fw, bestR, bestWet, bestSize, bfGrad);
+                 vec2 sk = vec2(wp.x * 0.8 + wp.y * 0.6, wp.y * 0.8 - wp.x * 0.6) + 17.0;
+                 bfCraters(sk, 7.7, 405.0, 0.25, 0.12, 0.3, sd, wetShare * 0.4, fw, bestR, bestWet, bestSize, bfGrad);
                }
                if (bestR < 1.7) {
                  float vis = (1.0 - smoothstep(bestSize * 0.3, bestSize * 1.1, fw)) * (1.0 - steep * 0.7);

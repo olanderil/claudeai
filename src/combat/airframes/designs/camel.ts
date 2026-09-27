@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { v3, rgb } from '../geo';
+import { v3 } from '../geo';
 import type { Kit } from '../kit';
 import { buildFuselage, Fuselage, type FusKey } from '../fuselage';
 import {
@@ -8,7 +8,7 @@ import {
 } from '../parts';
 import { axleY, groundY, type Design, type DesignMeta } from '../design';
 import {
-  C, Painter, chips, crossPattee, fusRect, mud, rfcRoundel, smudge, soot, streaks, text, type FusMeta,
+  C, Painter, chips, fusRect, mud, rfcRoundel, smudge, soot, streaks, text, type FusMeta,
 } from '../livery';
 import { roundedEdge } from '../panel';
 
@@ -358,6 +358,5 @@ export const camel: Design = {
     streaks(p, 'L_bot', 0.3, 0.9, 0.0, 1.2, 1, 0.8, { count: 20, alpha: 0.3, seed: 8 });
     smudge(p, 'L_top', 0.55, 0.5, 0.25, 0.35, 0.3);
     p.fill('swatch', '#ffffff');
-    void crossPattee; void rgb;
   },
 };

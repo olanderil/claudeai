@@ -8,7 +8,7 @@ import { behindLines } from './Front';
  * A landscape can be beautiful and still give you no reason to go anywhere in
  * particular. What turns scenery into somewhere to explore is a silhouette on
  * the horizon that resolves into a thing — a light on a headland, a castle on
- * a hill, a line of turbines along a ridge. You go and look, and on the way you
+ * a hill, a fort crowning a ridge. You go and look, and on the way you
  * see the country in between.
  *
  * Each kind is placed by rules read off the height field, the way the boats
@@ -50,7 +50,7 @@ export interface Structure {
 
 export interface StructureOptions {
   enabled: boolean;
-  /** No turbines or masts where there is nobody to serve. */
+  /** No castles or abbeys where nobody has ever lived. */
   peopled: boolean;
   /** Worlds with no sea get no lighthouses and no offshore wind. */
   coastal: boolean;

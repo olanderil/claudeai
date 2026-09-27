@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import {
-  Geo, alongZ, box, cyl, disc, ellipsoid, lathe, mat, plate, rgb, strut, torus, tube, v3, wire,
+  Geo, WHITE, alongZ, box, cyl, disc, ellipsoid, lathe, mat, plate, rgb, strut, torus, tube, v3, wire,
   type RGB, type V3,
 } from './geo';
 import type { Kit } from './kit';
 import type { SkinRegion } from './atlas';
 import { buildPanel, finMatrix, panelMatrix, surfacePoint, type PanelSpec } from './panel';
 import type { WingMeta } from './livery';
-import { DIAL, dialRect, PR } from './props';
+import { DIAL, dialRect } from './props';
 import type { Fuselage } from './fuselage';
 
 /**
@@ -168,7 +168,7 @@ export function tailSurface(k: Kit, t: TailSpec): WingOut {
  * follow the paint scheme — a red Dr.I has red struts.
  */
 export function woodStrut(k: Kit, a: V3, b: V3, chord: number, col: RGB = COL.wood, thick = 0.3, hit?: string, region: 'wood' | 'paint' | 'steel' | 'livery' = 'wood'): void {
-  const g = strut(a, b, chord, thick, region === 'livery' ? WHITE_ : col, { m: k.n(6, 3, 2) });
+  const g = strut(a, b, chord, thick, region === 'livery' ? WHITE : col, { m: k.n(6, 3, 2) });
   if (region === 'livery') k.skin(g.pin(k.atlas.region('struts', 'swatch'), 0.02, 0.02), 'static', hit);
   else k.props(g, region, 'static', hit);
 }
@@ -417,7 +417,7 @@ export function propeller(k: Kit, p: PropSpec): void {
     const vtx = (g: Geo, x: number, t: number, back: boolean): number => {
       const P = bladeAt(x, t, back);
       const n = rawN(x, t, back).multiplyScalar(back ? sBack : sFace);
-      return g.vert(P.x, P.y, P.z, n.x, n.y, n.z, (P.z - zmin) / (zmax - zmin), x, WHITE_);
+      return g.vert(P.x, P.y, P.z, n.x, n.y, n.z, (P.z - zmin) / (zmax - zmin), x, WHITE);
     };
     for (let i = 0; i < nx; i++) for (let j = 0; j < nt; j++) {
       const x0 = i / nx, x1 = (i + 1) / nx;
@@ -463,7 +463,7 @@ export function propeller(k: Kit, p: PropSpec): void {
       prof.push([sr * Math.pow(Math.sin((t * Math.PI) / 2), 0.75), base - sl * (1 - t)]);
     }
     prof.push([sr * 0.97, base + 0.01]);
-    const sp = lathe(prof, k.n(24, 12, 8), { col: p.spinner.livery ? WHITE_ : p.spinner.col ?? COL.white }).transform(mat(p.hub));
+    const sp = lathe(prof, k.n(24, 12, 8), { col: p.spinner.livery ? WHITE : p.spinner.col ?? COL.white }).transform(mat(p.hub));
     // Spinners were a favourite place for unit colours: let the livery paint it.
     if (p.spinner.livery) k.skin(sp.pin(k.atlas.region('spinner', 'swatch'), 0.02, 0.02), node);
     else k.props(sp, 'paint', node);
@@ -473,7 +473,6 @@ export function propeller(k: Kit, p: PropSpec): void {
   k.special('disc', disc(p.R, 48).transform(mat([p.hub.x, p.hub.y, p.hub.z - 0.03])), dnode);
 }
 
-const WHITE_: RGB = [1, 1, 1];
 const smooth01 = (t: number): number => { const x = Math.min(1, Math.max(0, t)); return x * x * (3 - 2 * x); };
 
 // ---------------------------------------------------------------- guns
@@ -606,18 +605,20 @@ export function figure(k: Kit, f: FigureSpec): { neck: V3 } {
   // Head: the eyes sit on the front of it.
   putH(ellipsoid(0.076, 0.098, 0.093, hs, vs, COL.skin).transform(mat([0, 0.012, 0.068])), 'face');
   putH(ellipsoid(0.018, 0.024, 0.02, 6, 4, COL.skin).transform(mat([0, -0.025, -0.022])), 'face'); // nose
-  // Helmet: crown, then back and sides with the face cut out.
+  // Helmet: crown, then back and sides with the face cut out, down over the nape.
   putH(ellipsoid(0.084, 0.106, 0.101, hs, k.n(6, 3, 2), helmet, { t0: 0, t1: 1.1 }).transform(mat([0, 0.014, 0.068])), 'leather');
-  putH(ellipsoid(0.084, 0.106, 0.101, hs, k.n(8, 4, 2), helmet, { t0: 1.1, t1: 2.25, p0: -Math.PI + 0.8, p1: Math.PI - 0.8 }).transform(mat([0, 0.014, 0.068])), 'leather');
-  // Neck, collar, scarf wrap, coat.
-  // Neck wound in the scarf: from behind a bare neck looks wrong.
-  put(cyl(0.056, 0.06, -0.1, 0.06, hs, f.scarf ?? COL.silk, false).transform(new THREE.Matrix4().makeRotationX(Math.PI / 2)).transform(mat([0, -0.11, 0.085])), 'silk');
-  put(torus(0.07, 0.03, hs, 8, f.scarf ?? COL.silk).transform(new THREE.Matrix4().makeRotationX(Math.PI / 2)).transform(mat([0, -0.15, 0.08])), 'silk');
-  put(torus(0.1, 0.045, hs, 8, COL.fur).transform(new THREE.Matrix4().makeRotationX(Math.PI / 2)).transform(mat([0, -0.2, 0.09])), 'fur');
-  put(ellipsoid(0.215, 0.3, 0.14, hs, vs, coat).transform(mat([0, -0.46, 0.11])), 'leather');
-  put(ellipsoid(0.24, 0.1, 0.13, hs, vs, coat).transform(mat([0, -0.28, 0.1])), 'leather');
+  putH(ellipsoid(0.086, 0.108, 0.103, hs, k.n(8, 4, 2), helmet, { t0: 1.1, t1: 2.6, p0: -Math.PI + 0.85, p1: Math.PI - 0.85 }).transform(mat([0, 0.014, 0.068])), 'leather');
+  // Ear flaps.
+  for (const s of [-1, 1]) putH(ellipsoid(0.02, 0.05, 0.04, 8, 6, helmet).transform(mat([s * 0.078, -0.03, 0.05])), 'leather');
+  // Short neck, a thick wrap of silk, the coat's fur collar turned up under it.
+  // A roll-neck sweater under the coat: no bare neck from behind.
+  put(cyl(0.05, 0.054, -0.05, 0.05, hs, rgb('#3b372f'), false).transform(new THREE.Matrix4().makeRotationX(Math.PI / 2)).transform(mat([0, -0.1, 0.078])), 'cloth');
+  put(torus(0.058, 0.038, hs, 8, f.scarf ?? COL.silk).transform(new THREE.Matrix4().makeRotationX(Math.PI / 2)).transform(mat([0, -0.118, 0.08])), 'silk');
+  put(torus(0.095, 0.05, hs, 8, COL.fur).transform(new THREE.Matrix4().makeRotationX(Math.PI / 2)).transform(mat([0, -0.17, 0.09])), 'fur');
+  put(ellipsoid(0.215, 0.3, 0.14, hs, vs, coat).transform(mat([0, -0.43, 0.11])), 'leather');
+  put(ellipsoid(0.24, 0.1, 0.135, hs, vs, coat).transform(mat([0, -0.245, 0.1])), 'leather');
   for (const s of [-1, 1]) {
-    put(ellipsoid(0.065, 0.16, 0.07, 10, 6, coat).transform(mat([s * 0.2, -0.43, 0.04], [0.5, 0, s * 0.1])), 'leather');
+    put(ellipsoid(0.065, 0.16, 0.07, 10, 6, coat).transform(mat([s * 0.2, -0.4, 0.04], [0.5, 0, s * 0.1])), 'leather');
   }
   if (k.detail === 0) {
     // Goggles: brass-rimmed cups, dark lenses, a strap round the helmet.
@@ -630,7 +631,7 @@ export function figure(k: Kit, f: FigureSpec): { neck: V3 } {
     // Chin strap: the lower half of a ring round the jaw.
     putH(torus(0.078, 0.006, 14, 4, helmet, Math.PI * 0.6, Math.PI * 1.4).transform(mat([0, 0.0, 0.035])), 'leather');
   }
-  return { neck: v3(0, -0.15, 0.13).applyMatrix4(R).add(f.eye) };
+  return { neck: v3(0, -0.13, 0.13).applyMatrix4(R).add(f.eye) };
 }
 
 // ---------------------------------------------------------------- cockpit
@@ -745,7 +746,6 @@ export function radiator(k: Kit, c: V3, w: number, h: number, d: number, face: V
   k.props(core.color(rgb('#8c7550')).transform(new THREE.Matrix4().makeTranslation(0, 0, -0.003)).transform(m), 'radiator', 'static', 'fus');
 }
 
-export { PR };
 
 export interface RingSpec {
   /** Ring centre (on the coaming), body space. */

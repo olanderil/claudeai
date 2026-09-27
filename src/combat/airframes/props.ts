@@ -93,7 +93,6 @@ export function propTextures(): PropTextures {
     octx.fillStyle = `rgb(255,${Math.round(d.rough * 255)},${Math.round(d.metal * 255)})`;
     octx.fillRect(d.x, d.y, d.w, d.h);
   }
-  const R = rng(1917);
   const px = (d: RegionDef, fn: (x: number, y: number, u: number, v: number) => number | void, alb?: (x: number, y: number, u: number, v: number) => number): void => {
     const img = ctx.getImageData(d.x, d.y, d.w, d.h);
     for (let y = 0; y < d.h; y++) for (let x = 0; x < d.w; x++) {
@@ -227,7 +226,6 @@ export function propTextures(): PropTextures {
   });
 
   paintDials(ctx);
-  void R;
 
   const normal = heightToNormal(height, SIZE, SIZE, 1500, 1);
   cached = {

@@ -247,9 +247,12 @@ export function buildPanel(sp: PanelSpec): PanelOut {
     if (ks > 0) { face(main, ks, nF, J, v3(1, 0, 0)); }
     face(ctrl, ks, nF, J, v3(-1, 0, 0));
     if (ke < K - 1) { face(main, ke, nF, J, v3(-1, 0, 0)); face(ctrl, ke, nF, J, v3(1, 0, 0)); }
-    const mid = (k: number): V3 => v3(S[k], (P[0][k][nF].y + P[1][k][nF].y) / 2, P[0][k][nF].z);
-    hingeA = mid(ks);
-    hingeB = mid(ke);
+    // The axis comes from the hinge line itself, not the grid: where a raked
+    // or rounded tip cuts the chord short, the grid point is clamped forward
+    // and would skew the axis.
+    const yh = (P[0][ks][nF].y + P[1][ks][nF].y) / 2;
+    hingeA = v3(S[ks], yh, hinge.x(S[ks]));
+    hingeB = v3(S[ke], yh, hinge.x(S[ke]));
   }
   if (sp.capRoot) face(sp.moving ? ctrl : main, 0, 0, J, v3(-1, 0, 0));
   if (sp.te(sp.s1) - sp.le(sp.s1) > 0.03) {

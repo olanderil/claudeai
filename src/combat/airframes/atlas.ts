@@ -145,15 +145,19 @@ export class SkinAtlas {
     ctx.restore();
   }
 
-  /** Iterate pixels of a region with their metre coordinates. */
-  forPixels(r: SkinRegion, fn: (px: number, py: number, u: number, v: number) => void, bleed = ATLAS_PAD): void {
-    const s = this.scale;
-    const x0 = Math.max(0, Math.floor(r.px - bleed)), y0 = Math.max(0, Math.floor(r.py - bleed));
-    const x1 = Math.min(this.size, Math.ceil(r.px + (r.u1 - r.u0) * s + bleed));
-    const y1 = Math.min(this.size, Math.ceil(r.py + (r.v1 - r.v0) * s + bleed));
+  /**
+   * Iterate pixels of a region with their metre coordinates, on a map whose
+   * resolution is `res` times the atlas's (0.5 for a half-size map).
+   */
+  forPixels(r: SkinRegion, fn: (px: number, py: number, u: number, v: number) => void, bleed = ATLAS_PAD, res = 1): void {
+    const s = this.scale * res, size = Math.round(this.size * res);
+    const ox = r.px * res, oy = r.py * res, b = bleed * res;
+    const x0 = Math.max(0, Math.floor(ox - b)), y0 = Math.max(0, Math.floor(oy - b));
+    const x1 = Math.min(size, Math.ceil(ox + (r.u1 - r.u0) * s + b));
+    const y1 = Math.min(size, Math.ceil(oy + (r.v1 - r.v0) * s + b));
     for (let y = y0; y < y1; y++) {
-      const v = r.v0 + (y + 0.5 - r.py) / s;
-      for (let x = x0; x < x1; x++) fn(x, y, r.u0 + (x + 0.5 - r.px) / s, v);
+      const v = r.v0 + (y + 0.5 - oy) / s;
+      for (let x = x0; x < x1; x++) fn(x, y, r.u0 + (x + 0.5 - ox) / s, v);
     }
   }
 }

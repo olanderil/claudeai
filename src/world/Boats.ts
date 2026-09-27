@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { SEA_LEVEL } from './Sea';
 
 /**
- * Shipping: sailing boats near the coast and cargo ships out in the deep.
+ * Shipping: fishing smacks near the coast and tramp steamers out in the deep.
  *
  * An empty ocean reads as a texture rather than as a place. One ship on it and
  * the same water suddenly has a scale — you can see how far away the horizon
@@ -42,7 +42,7 @@ export interface BoatOptions {
    */
   sail: boolean;
   seed: number;
-  /** Keep this clear of the origin — the runway, or the carrier's water. */
+  /** Keep this clear of the origin — the home aerodrome. */
   exclusion: number;
 }
 

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { AirframeId } from './Types';
+import { TYPES, type AirframeId } from './Types';
 import { SkinAtlas } from './airframes/atlas';
 import { Kit, type Detail, type NodeFlags } from './airframes/kit';
 import { Painter, reliefNormalMap } from './airframes/livery';
@@ -125,18 +125,27 @@ function template(id: AirframeId): Template {
   const l1 = kits[1].finalize();
   const l2 = kits[2].finalize();
 
-  // Size from the exterior (no cockpit furniture, prop disc or flashes).
-  const box = new THREE.Box3();
+  // Size from the exterior (no cockpit furniture, prop disc or flashes). The
+  // propeller counts toward length only: parked, its blade would stand above
+  // the top wing and be reported as the aircraft's height.
+  const box = new THREE.Box3(), withProp = new THREE.Box3();
   l0.level.updateMatrixWorld(true);
   l0.level.traverse((o) => {
     if (!(o instanceof THREE.Mesh)) return;
     const slot = o.userData.slot as string;
     if (slot === 'disc' || slot === 'flash' || slot === 'glass') return;
-    let p: THREE.Object3D | null = o;
-    while (p) { if ((p.userData.flags as NodeFlags | undefined)?.cockpit) return; p = p.parent; }
-    box.expandByObject(o);
+    let p: THREE.Object3D | null = o, prop = false;
+    while (p) {
+      if ((p.userData.flags as NodeFlags | undefined)?.cockpit) return;
+      if (/^prop\d/.test(p.name)) prop = true;
+      p = p.parent;
+    }
+    const b = new THREE.Box3().setFromObject(o, true);
+    withProp.union(b);
+    if (!prop) box.union(b);
   });
   const sz = box.getSize(new THREE.Vector3());
+  sz.z = withProp.getSize(new THREE.Vector3()).z;
   const hitboxes = [...kits[0].hit.values()].map((b) => ({
     c: b.getCenter(new THREE.Vector3()),
     h: b.getSize(new THREE.Vector3()).multiplyScalar(0.6),
@@ -301,7 +310,7 @@ class Scarf {
       const half = 0.055 * (1 - t * 0.35);
       const wx = Math.cos(twist) * half, wy = Math.sin(twist) * half;
       // Normal ≈ width × direction.
-      let nx = wy * (dz / dl) - 0, ny = -wx * (dz / dl), nz = wx * (dy / dl) - wy * (dx / dl);
+      let nx = wy * (dz / dl), ny = -wx * (dz / dl), nz = wx * (dy / dl) - wy * (dx / dl);
       const nl = Math.hypot(nx, ny, nz) || 1;
       nx /= nl; ny /= nl; nz /= nl;
       const v = i * 4;
@@ -385,7 +394,7 @@ class Rig implements AirframeRig {
     this.exhausts = t.meta.exhausts.map((e) => e.clone());
     this.engines = t.meta.engines.map((e) => e.clone());
     this.size = { ...t.size };
-    this.rpmMax = t.design.id === 'camel' || t.design.id === 'dr1' ? 1250 : 1600;
+    this.rpmMax = TYPES[t.design.id].rpmMax;
 
     const l0 = t.level0.clone(true);
     const always = t.always.clone(true);
