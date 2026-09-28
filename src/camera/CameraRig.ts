@@ -582,6 +582,28 @@ export class CameraRig {
   }
 
   /**
+   * How fast the game should run right now, 1 being real time: the director
+   * takes a kill in slow motion for a beat. Only while it is on screen.
+   */
+  get timeWarp(): number {
+    return this.directing() ? this.director.timeWarp : 1;
+  }
+
+  /** Slow motion on kills, in the views the director films. */
+  get slowKills(): boolean {
+    return this.director.slowKills;
+  }
+
+  setSlowKills(on: boolean): void {
+    this.director.slowKills = on;
+  }
+
+  /** The act of the fight the director is telling. */
+  get act(): string {
+    return this.director.currentAct;
+  }
+
+  /**
    * A jolt: a hit taken, a shell bursting close, a heavy landing. Adds to
    * whatever is already shaking and dies away over a second or so. 1 is a
    * solid hit; 0.3 a near burst.

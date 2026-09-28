@@ -1033,6 +1033,15 @@ export const WORLD_PRESETS: WorldPreset[] = [
   },
 ];
 
+/**
+ * The order the fronts are offered in — on the World tab, by `N`, and which
+ * one the game opens on: the mountains first, the Flanders mud last. Kept as
+ * a list rather than by moving the presets about, which are written roughly
+ * west to east above.
+ */
+const FRONT_ORDER = ['ALPS', 'SINAI', 'ISONZO', 'GALLIPOLI', 'DOLOMITES', 'SOMME', 'VERDUN', 'FLANDERS'];
+WORLD_PRESETS.sort((a, b) => FRONT_ORDER.indexOf(a.name) - FRONT_ORDER.indexOf(b.name));
+
 // ------------------------------------------------------------------- sampling
 
 let active: WorldPreset = WORLD_PRESETS[0];

@@ -101,7 +101,13 @@ export class Game {
     };
     this.host = host;
     this.battle.listener = {
-      planeDown: (p, k) => this.mode?.planeDown(p, k),
+      planeDown: (p, k) => {
+        this.mode?.planeDown(p, k);
+        // The title fight has no score to keep, but its kills are still kills.
+        if (this.state === 'attract' && k !== null && k === this.attractSubject) {
+          events.killCam({ position: p.position, velocity: p.velocity });
+        }
+      },
       targetDestroyed: (t, by) => this.mode?.targetDestroyed(t, by),
       landed: (p) => this.mode?.landed(p),
       playerHit: () => events.hurt(),
@@ -120,8 +126,27 @@ export class Game {
 
   /** The aircraft the camera should follow. */
   get subject(): PlaneVisual | null {
-    const p = this.state === 'attract' ? this.attractSubject : this.battle.player;
+    const p = this.subjectPlane;
     return p ? this.battle.visualOf(p) ?? null : null;
+  }
+
+  /** The machine being filmed: the player's, or the title fight's current star. */
+  get subjectPlane(): Plane | null {
+    return this.state === 'attract' ? this.attractSubject : this.battle.player;
+  }
+
+  /**
+   * Who the filmed machine is really fighting, for the camera: when an AI pilot
+   * is flying it (watch, the title fight) that is its own target, not the
+   * nearest thing in front of the nose.
+   */
+  get storyTarget(): Plane | null {
+    const p = this.subjectPlane;
+    const brain = p?.brain as Brain | null | undefined;
+    const own = brain?.target ?? null;
+    if (this.state === 'attract') return own?.alive ? own : null;
+    if (this.autopilot && own?.alive) return own;
+    return this.target;
   }
 
   /* ------------------------------------------------------------- modes */
@@ -345,8 +370,7 @@ export class Game {
   }
 
   /** The enemy most likely to be shooting at the player right now. */
-  threat(): Plane | null {
-    const p = this.player;
+  threat(p: Plane | null = this.player): Plane | null {
     if (!p || !p.alive) return null;
     const v = new THREE.Vector3();
     let best: Plane | null = null;
@@ -373,12 +397,17 @@ export class Game {
     this.attractSwitchT -= dt;
     if (!this.attractSubject || !this.attractSubject.alive || this.attractSwitchT <= 0) {
       const alive = b.planes.filter((q) => q.alive);
-      const next = alive.length ? pick(alive) : null;
+      // Follow somebody with a fight on their hands: a story needs an enemy.
+      const fighting = alive.filter((q) => {
+        const t = (q.brain as Brain | null)?.target;
+        return t?.alive === true && t.position.distanceTo(q.position) < 1200;
+      });
+      const next = fighting.length ? pick(fighting) : alive.length ? pick(alive) : null;
       if (next !== this.attractSubject) {
         this.attractSubject = next;
         this.events.subjectChanged(next ? b.visualOf(next) ?? null : null);
       }
-      this.attractSwitchT = 16;
+      this.attractSwitchT = 24;
     }
     if (this.attractT > 0) return;
     this.attractT = 3;

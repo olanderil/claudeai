@@ -91,6 +91,8 @@ function boot(): void {
   let dofOverride: number | null = null;
   let depthOfField = true;
   let wasAirborne = false;
+  /** The filmed machine's guns were firing last frame, for cutting on the burst. */
+  let wasFiring = false;
   const sunDirection = new THREE.Vector3(0.4, 0.5, 0.3);
   const landmarkPoint = new THREE.Vector3();
 
@@ -1074,7 +1076,11 @@ function boot(): void {
       rig.addShake(clamp(0.6 - d / 200, 0.1, 0.6));
       if (d < 120) rig.requestShot('flak');
     },
-    hitConfirm: () => hud.onHit(),
+    hitConfirm: () => {
+      hud.onHit();
+      // Hits going home: a reaction shot of the machine taking them.
+      rig.requestShot('struck');
+    },
     report: (r) => {
       showMenusCursor();
       menus.showReport(r, game.mission);
@@ -1572,17 +1578,26 @@ function boot(): void {
     updateLighting();
     if (world.driftIndexValue > 0 && panel.isOpen) panel.sync();
 
-    // Camera: what's being fought, who's behind, and whose seat we're in.
+    // Camera: what's being fought, who's behind, and whose seat we're in. The
+    // story is the filmed machine's own — in the title fight and while
+    // watching, whoever its pilot has actually picked to fight.
     const subjectPlane = game.state === 'attract' ? null : game.player;
-    const target = game.target;
-    const threat = game.threat();
+    const filmed = game.subjectPlane;
+    const target = game.storyTarget;
+    const threat = game.threat(filmed);
     rig.setCombatContext({
       target: target && target.alive
         ? { position: target.position, velocity: target.velocity, cameraScale: battle.visualOf(target)?.cameraScale }
         : null,
       threat: threat ? { position: threat.position } : null,
     });
-    rig.setGunfire(Boolean(subjectPlane?.input.fire && subjectPlane.gun.jam <= 0 && subjectPlane.gun.ammo > 0));
+    const firing = Boolean(filmed?.alive && filmed.input.fire && filmed.gun.jam <= 0 && filmed.gun.ammo > 0);
+    rig.setGunfire(Boolean(subjectPlane && firing));
+    // Cut on action: the moment the guns open up on a target in range.
+    if (firing && !wasFiring && target && filmed && target.position.distanceTo(filmed.position) < 450) {
+      rig.requestShot('firing');
+    }
+    wasFiring = firing;
     // V: padlock the target from the cockpit — the rig handles the look over
     // the shoulder when it's dead astern.
     rig.setCockpitPadlock(rig.mode === 'cockpit' && input.isDown('KeyV'));
@@ -1596,6 +1611,8 @@ function boot(): void {
         nearestStructure(subjectPos), telemetrySource.telemetry.agl);
       rig.update(dt, subject, telemetrySource.telemetry);
     }
+    // The game clock: the watch speed, and the director's slow motion on a kill.
+    loop.timeScale = (game.autopilot ? TOUR_SPEEDS[tourSpeedIndex] : 1) * (paused ? 1 : rig.timeWarp);
     const airborne = telemetrySource ? !telemetrySource.telemetry.onGround : true;
     if (airborne !== wasAirborne) {
       rig.requestShot(airborne ? 'takeoff' : 'landing');
@@ -1722,6 +1739,8 @@ function boot(): void {
       tourSpeedIndex = clamp(Math.round(i), 0, TOUR_SPEEDS.length - 1);
       applyTourSpeed();
     },
+    getSlowKills: () => rig.slowKills,
+    setSlowKills: (on) => rig.setSlowKills(on),
     newWorld: () => newWorld({ reseed: true }),
     newWorldTakeoff: () => newWorld({ reseed: true }),
     currentSeed: () => world.seed,

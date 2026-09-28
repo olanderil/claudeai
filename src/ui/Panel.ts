@@ -25,6 +25,9 @@ export interface PanelApi {
   tourSpeedOptions: string[];
   getTourSpeed(): number;
   setTourSpeed(index: number): void;
+  /** The cinematic director takes a kill in slow motion. */
+  getSlowKills(): boolean;
+  setSlowKills(on: boolean): void;
   /** Reseed the current front, keeping the battle going. */
   newWorld(): void;
   /** Reseed the current front and restart the battle. */
@@ -242,6 +245,9 @@ export class Panel {
       () => this.api.getTourSpeed(),
       (i) => this.api.setTourSpeed(i),
     ));
+    tour.appendChild(
+      this.checkbox('Slow motion on kills', () => this.api.getSlowKills(), (v) => this.api.setSlowKills(v)),
+    );
 
     this.body.appendChild(tour);
 

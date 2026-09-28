@@ -128,6 +128,11 @@ interface ShotSpec {
    */
   pair?: number;
   /**
+   * Pair the player with the machine just shot down rather than with the
+   * target: the aftermath, where the wreck is still falling in the frame.
+   */
+  with?: 'victim';
+  /**
    * Bolted to the airframe. The offset is read in the aircraft's full body
    * frame — it pitches and rolls with it — and 'eye' measures it from the
    * pilot's eye rather than the CG. The camera rolls with the aeroplane: the
@@ -611,14 +616,14 @@ const SHOTS: ShotSpec[] = [
     // near the sight — the gun camera.
     name: 'guns-eye', scale: 'close', side: 0, mount: 'eye', guns: true, interior: true,
     from: [0.0, 0.03, -0.1], to: [0.0, 0.02, -0.16], look: [0, 0.02, -80],
-    fov: [46, 42], lag: 6, near: 0.05, combat: true, scenic: true, tags: ['engage'],
+    fov: [46, 42], lag: 6, near: 0.05, combat: true, scenic: true, tags: ['engage', 'firing'],
   },
   {
     // Over the shoulder at the bandit: behind and above the player on the line
     // from the enemy, both of them in frame.
     name: 'on his six', scale: 'close', side: 0, azimuth: 'target', pair: 0.45,
     from: [1.2, 2.6, 11], to: [0.8, 2.0, 8], lead: 0, fov: [52, 48], lag: 4,
-    tags: ['engage'],
+    tags: ['engage', 'firing'],
   },
   {
     // A wingman's view: from where a wingman flies — behind and off to one
@@ -632,6 +637,7 @@ const SHOTS: ShotSpec[] = [
     // foreground and the pursuer behind him.
     name: 'pursuit', scale: 'medium', side: 1, subject: 'target', azimuth: 'player', pair: 0.5,
     from: [3.2, 2.2, 10], to: [2.4, 1.6, 7.5], lead: 0, fov: [48, 44], lag: 3.5,
+    tags: ['struck'],
   },
   {
     // Low, just outboard of the wingtip, looking aft past the tailplane at the
@@ -657,7 +663,7 @@ const SHOTS: ShotSpec[] = [
     // The enemy machine itself, in profile, in its own track.
     name: 'bandit', scale: 'close', side: 1, subject: 'target',
     from: [9, 1.5, 2], to: [7, 1.0, -1.5], look: [0, 0.3, -1], lead: 1,
-    fov: [44, 40], lag: 4, dof: 0.6,
+    fov: [44, 40], lag: 4, dof: 0.6, tags: ['struck'],
   },
   {
     // The whole fight from well outside it: two machines circling.
@@ -675,7 +681,7 @@ const SHOTS: ShotSpec[] = [
     // come at the lens, cross, and are gone.
     name: 'crossing', scale: 'medium', side: 1, locked: true, anchor: 'merge', pair: 0.5,
     from: [24, 4, 0], to: [24, 4, 0], lead: 0, fov: [46, 42], seconds: [4.0, 5.4],
-    tags: ['engage'],
+    tags: ['engage', 'merge'],
   },
   {
     // The kill cam: chasing the victim down, a little behind and above it.
@@ -688,6 +694,52 @@ const SHOTS: ShotSpec[] = [
     name: 'kill orbit', scale: 'medium', side: 1, subject: 'victim',
     from: [14, 6, 6], to: [11, 3, 4], orbit: Math.PI * 0.5, lead: 0,
     fov: [42, 38], lag: 3, reserved: true, tags: ['kill'],
+  },
+  {
+    // The fall, from the ground's side of it: a tripod planted ahead of and
+    // below the falling machine, which plunges past it trailing its smoke.
+    name: 'the fall', scale: 'wide', side: 1, subject: 'victim', locked: true,
+    from: [34, -62, -105], to: [34, -62, -105], lead: 0, fov: [40, 36],
+    reserved: true, tags: ['kill'],
+  },
+
+  // ======================================================== the story beats
+  //
+  // A fight told as a story has acts: the enemy seen far off, the two sides
+  // closing, the duel, the reversal when someone gets behind you, the kill,
+  // and the breath afterwards. These are the shots for the beats the fight
+  // setups above do not cover. All reserved — each is cut to when its beat
+  // comes round, never dealt at random.
+  {
+    // The sighting. Tucked in over the pilot's shoulder with a long lens on
+    // the enemy while they are still specks: the player's own machine is a
+    // sliver of wing along the bottom of the frame, and the fight is out
+    // there, coming. Near enough the player to count as foreground, so the
+    // lens is not opened to hold him.
+    name: 'the sighting', scale: 'medium', side: 1, azimuth: 'target', pair: 1,
+    from: [1.2, 2.6, 5.6], to: [0.9, 2.3, 5.4], lead: 0, fov: [30, 26], lag: 4,
+    reserved: true, tags: ['sighting'],
+  },
+  {
+    // The enemy, introduced: his machine in three-quarter front on its own
+    // track, with whoever flies beside him in the frame.
+    name: 'the enemy', scale: 'medium', side: 1, subject: 'target',
+    from: [26, 5, -34], to: [17, 3.5, -20], look: [0, 0.5, 0], lead: 0,
+    fov: [38, 34], lag: 3, dof: 0.35, reserved: true, tags: ['sighting'],
+  },
+  {
+    // The joust: just behind the player's wing, looking along the line at the
+    // machine coming head-on, the gap closing at two hundred miles an hour.
+    name: 'the joust', scale: 'close', side: 1, azimuth: 'target', pair: 0.55,
+    from: [4.5, 1.6, 7.5], to: [3.8, 1.3, 6.2], lead: 0, fov: [50, 46], lag: 5,
+    reserved: true, tags: ['merge'],
+  },
+  {
+    // The breath afterwards: the camera lets the player go, rising and pulling
+    // away, with the wreck still falling somewhere in the frame.
+    name: 'the aftermath', scale: 'wide', side: 1, with: 'victim', pair: 0.4,
+    from: [16, 5, 20], to: [62, 26, 72], lead: 0, fov: [46, 38], lag: 2.2,
+    linear: true, seconds: [5.2, 6.6], reserved: true, tags: ['aftermath'],
   },
 ];
 
@@ -819,6 +871,48 @@ export const COMBAT_RANGE = 600;
 const COMBAT_SHARE = 0.75;
 
 /**
+ * The acts of a fight, as a story.
+ *
+ * 'patrol' is nobody about; 'sighting' an enemy far off, still specks;
+ * 'merge' two machines closing head-on; 'duel' a fight within reach;
+ * 'defence' someone on the player's tail; 'aftermath' the breath after a
+ * kill. Each changes what is cut to, and how fast.
+ */
+export type Act = 'patrol' | 'sighting' | 'merge' | 'duel' | 'defence' | 'aftermath';
+/** Out to here an enemy is the story beginning, m. */
+const SIGHT_RANGE = 2600;
+/** Closing speed above which two machines are meeting head-on, m/s. */
+const MERGE_CLOSING = 60;
+/** How long the breath after a kill lasts, seconds. */
+const AFTERMATH = 7;
+/**
+ * Pace by act: a multiplier on every shot's hold. The fight cuts faster the
+ * tighter it gets, and the moment after a kill is allowed to linger.
+ */
+const ACT_HOLD: Record<Act, number> = {
+  patrol: 1, sighting: 1.1, merge: 0.8, duel: 0.85, defence: 0.75, aftermath: 1.25,
+};
+/** Share of cuts that go to the fight, by act, when there is one in reach. */
+const ACT_COMBAT: Record<Act, number> = {
+  patrol: COMBAT_SHARE, sighting: COMBAT_SHARE, merge: 0.9, duel: 0.8, defence: 0.85, aftermath: 0.3,
+};
+/**
+ * Least seconds between cuts that the fight asks for, by event. An editor
+ * cuts on action, but a cut on *every* action — each round that hits, each
+ * burst — is a strobe.
+ */
+const CUE_GAP: Record<string, number> = {
+  sighting: 14, merge: 6, engage: 5, firing: 8, struck: 7, hit: 6, flak: 9,
+};
+/**
+ * How long the shot on screen must have run before an event may cut it:
+ * long enough to have said what it came to say. The merge will not wait.
+ */
+const CUE_SETTLE: Record<string, number> = { merge: 0.6, engage: 0.9 };
+/** Game speed at the bottom of a kill's slow motion. */
+const KILL_SLOW = 0.3;
+
+/**
  * Nearest a carried camera may come to an aircraft's CG, metres at the
  * reference scale — half the span and a metre. The frames that swing with the
  * fight can put an authored offset anywhere relative to the wings, so this is
@@ -899,7 +993,11 @@ export interface ShotInfo {
   pair: boolean;
   /** Whose shot it is: the player's, or the enemy's. */
   subject: 'player' | 'target';
+  /** The beat of the story this shot is cut to for, if it is one of those. */
+  beat: 'sighting' | 'merge' | 'aftermath' | null;
 }
+
+const BEATS = ['sighting', 'merge', 'aftermath'] as const;
 
 /**
  * The one name the picker offers for every landmark-anchored setup.
@@ -942,6 +1040,7 @@ export function shotCatalogue(): ShotInfo[] {
         mounted: false,
         pair: false,
         subject: 'player',
+        beat: null,
       });
       continue;
     }
@@ -969,6 +1068,9 @@ function describe(s: ShotSpec): ShotInfo {
     mounted: s.mount !== undefined,
     pair: s.pair !== undefined,
     subject: s.subject === 'target' ? 'target' : 'player',
+    // Reserved and tagged: the story shots. ('merge' alone also marks the
+    // crossing tripod, which is dealt in any fight, so reserved decides.)
+    beat: s.reserved === true ? BEATS.find((b) => s.tags?.includes(b) === true) ?? null : null,
   };
 }
 
@@ -1121,8 +1223,37 @@ export class CinematicDirector {
   private pairFov = 0;
   /** Where along a merge tripod's shot the two are expected to pass. */
   private mergePass = 0.5;
-  /** A fight is on — for cutting to it once when it starts. */
-  private engaged = false;
+  // ------------------------------------------------------------- the story
+  /** Which act of the fight this is. */
+  private act: Act = 'patrol';
+  /** Seconds of the breath after a kill still to run. */
+  private aftermathT = 0;
+  /** The machine last shot down, for the aftermath's two-shot. */
+  private lastVictim: CombatBody | null = null;
+  /** Seconds since the fight last asked for a cut. */
+  private sinceCue = 99;
+  /** An act's opening beat that could not be cut to at once, and that act. */
+  private owed: string | null = null;
+  private owedAct: Act = 'patrol';
+  /** Take kills in slow motion (the rig applies it to the game clock). */
+  slowKills = true;
+
+  /** The act of the fight the sequence is telling. */
+  get currentAct(): Act {
+    return this.act;
+  }
+
+  /**
+   * How fast the world should run while this shot plays, 1 being real time.
+   * A kill is taken in slow motion for a beat — the machine staggering, the
+   * first flame — then eased back up to speed as it falls away.
+   */
+  get timeWarp(): number {
+    if (!this.slowKills || this.shot.subject !== 'victim' || this.victim === null || !this.started) return 1;
+    const t = this.elapsed;
+    if (t < 0.2) return lerp(1, KILL_SLOW, t / 0.2);
+    return lerp(KILL_SLOW, 1, smoothstep(1.3, 2.4, t));
+  }
 
   get shotName(): string {
     return this.shot.name;
@@ -1242,6 +1373,7 @@ export class CinematicDirector {
     const pool = SHOTS.filter((s) => s.subject === 'victim');
     if (pool.length === 0) return false;
     this.victim = victim;
+    this.lastVictim = victim;
     this.killSeconds = clamp(Number.isFinite(seconds) ? seconds : 3, 1, 12);
     this.pending = pool[Math.floor(Math.random() * pool.length)];
     this.killPending = true;
@@ -1529,11 +1661,101 @@ export class CinematicDirector {
    * touchdown, an engagement opening, a burst of hits taken.
    */
   request(event: string): void {
+    // The fight's own beats are cut to the way an editor would, not on demand.
+    if (CUE_GAP[event] !== undefined) {
+      this.cue(event);
+      return;
+    }
     const pool = SHOTS.filter((s) => s.tags?.includes(event) && s.subject !== 'victim'
       && !this.lacks(s));
     if (pool.length === 0) return;
     this.pending = pool[Math.floor(Math.random() * pool.length)];
     this.elapsed = this.duration; // take it on the next update
+  }
+
+  /**
+   * Cut on a beat of the fight — the enemy sighted, the merge, the player
+   * opening fire, hits going home, someone on his tail — but only as an
+   * editor would: not before the shot on screen has said what it came to say,
+   * never through a tripod's pass or a kill, not to a shot already telling
+   * the same beat, and not again for a few seconds after the last one.
+   * Returns whether the cut was taken.
+   */
+  cue(event: string): boolean {
+    if (!this.started || this.pinned || this.queue !== null || this.pending !== null) return false;
+    if (this.killActive) return false;
+    if (this.sinceCue < (CUE_GAP[event] ?? 5)) return false;
+    if (this.elapsed < (CUE_SETTLE[event] ?? 1.4) || !this.passIsDone()) return false;
+    if (this.shot.tags?.includes(event) === true) return false;
+    const pool = SHOTS.filter((s) => s.tags?.includes(event) === true && s.subject !== 'victim'
+      && s.name !== this.lastName && !this.lacks(s));
+    if (pool.length === 0) return false;
+    const fresh = pool.filter((s) => !this.recent.includes(s.name));
+    const from = fresh.length > 0 ? fresh : pool;
+    this.pending = from[Math.floor(Math.random() * from.length)];
+    this.elapsed = this.duration;
+    this.sinceCue = 0;
+    return true;
+  }
+
+  /**
+   * Work out which act of the fight this is, with some reluctance to leave
+   * one — a bandit hovering at the edge of reach must not flip the story back
+   * and forth — and cut to the opening beat of each new one.
+   */
+  private updateAct(dt: number, pos: THREE.Vector3): void {
+    this.aftermathT = Math.max(0, this.aftermathT - dt);
+    const cur = this.act;
+    const tg = this.target;
+    let next: Act = 'patrol';
+    if (this.threat !== null) {
+      next = 'defence';
+    } else if (this.aftermathT > 0) {
+      next = 'aftermath';
+    } else if (tg !== null) {
+      const d = tg.position.distanceTo(pos);
+      const closing = d > 1
+        ? -((tg.position.x - pos.x) * (tg.velocity.x - this.playerVel.x)
+          + (tg.position.y - pos.y) * (tg.velocity.y - this.playerVel.y)
+          + (tg.position.z - pos.z) * (tg.velocity.z - this.playerVel.z)) / d
+        : 0;
+      const fight = cur === 'duel' || cur === 'defence' || cur === 'merge' || cur === 'aftermath';
+      if (d > 70 && d < COMBAT_RANGE * 1.6 && closing > (cur === 'merge' ? 25 : MERGE_CLOSING)) next = 'merge';
+      else if (d < COMBAT_RANGE * (fight ? 1.15 : 0.85)) next = 'duel';
+      else if (d < SIGHT_RANGE * (cur === 'sighting' ? 1.1 : 1)) next = 'sighting';
+    }
+    if (next === cur) return;
+    this.act = next;
+    let opening: string | null = null;
+    if (next === 'sighting' && cur === 'patrol') opening = 'sighting';
+    else if (next === 'merge') opening = 'merge';
+    else if (next === 'duel' && (cur === 'patrol' || cur === 'sighting')) opening = 'engage';
+    else if (next === 'defence') opening = 'hit';
+    if (opening === null) return;
+    // If the shot on screen has not landed yet, the beat is owed: taken at
+    // the next cut, as long as the act it opens is still running.
+    if (this.cue(opening)) this.owed = null;
+    else {
+      this.owed = opening;
+      this.owedAct = next;
+    }
+  }
+
+  /** Take the beat an act opened with, if it is still owed and still means something. */
+  private takeOwed(pos: THREE.Vector3, quat: THREE.Quaternion): boolean {
+    const ev = this.owed;
+    this.owed = null;
+    if (ev === null || this.owedAct !== this.act) return false;
+    const pool = SHOTS.filter((s) => s.tags?.includes(ev) === true && s.subject !== 'victim'
+      && s.name !== this.lastName && !this.lacks(s) && !(s.locked && this.wasLocked));
+    if (pool.length === 0) return false;
+    const fresh = pool.filter((s) => !this.recent.includes(s.name));
+    const from = fresh.length > 0 ? fresh : pool;
+    const b = from[Math.floor(Math.random() * from.length)];
+    this.remember(b.name);
+    this.take(b, pos, quat);
+    this.sinceCue = 0;
+    return true;
   }
 
   reset(): void {
@@ -1579,20 +1801,11 @@ export class CinematicDirector {
       this.playerVel.set(0, 0, -1).applyQuaternion(quat).multiplyScalar(t.tas);
     }
     this.beat = this.manoeuvreBeat(t);
-    // A fight opening is a moment a director cuts *to*, whether or not anyone
-    // says so: the first time a bandit comes well inside reach, the hands-off
-    // sequence asks itself for an engagement shot. Entered at four-fifths of
-    // the combat range and left at a little past it, so a target hovering at
-    // the edge does not ring the bell every second.
-    const gap = this.target !== null ? this.target.position.distanceTo(pos) : Infinity;
-    if (!this.engaged && gap < COMBAT_RANGE * 0.8) {
-      this.engaged = true;
-      if (this.started && !this.pinned && this.queue === null && this.pending === null) {
-        this.request('engage');
-      }
-    } else if (this.engaged && gap > COMBAT_RANGE * 1.15) {
-      this.engaged = false;
-    }
+    // The fight is a story with acts, and the opening of each — the enemy
+    // sighted, the merge, the fight coming into reach, someone behind — is a
+    // moment a director cuts *to*, whether or not anyone says so.
+    this.sinceCue += dt;
+    this.updateAct(dt, pos);
     // A pinned shot still *plays* — its move runs to the end — it simply never
     // hands over to the next one. The clock is the cap, and a beat can bring
     // the cut forward inside the last stretch of it.
@@ -1874,7 +2087,8 @@ export class CinematicDirector {
     this.sAtt.copy(quat);
     yawOf(quat, this.sYaw);
     this.sScale = this.playerScale;
-    const other = shot.azimuth === 'threat' ? this.threat : this.target;
+    const other = shot.with === 'victim' ? this.lastVictim
+      : shot.azimuth === 'threat' ? this.threat : this.target;
     const wants = shot.pair !== undefined || combatAzimuth(shot) || shot.guns === true;
     if (other !== null && wants) {
       this.oPos.copy(other.position);
@@ -2042,6 +2256,19 @@ export class CinematicDirector {
       }
     }
 
+    // After a kill, the breath: the camera lets the player go and watches the
+    // wreck fall away. And for a few seconds after, the cutting slows.
+    if (this.started && this.shot.subject === 'victim' && this.pending === null) {
+      this.aftermathT = AFTERMATH;
+      if (this.threat === null) this.act = 'aftermath';
+      const after = SHOTS.find((s) => s.tags?.includes('aftermath') === true);
+      if (after !== undefined && this.lastVictim !== null && Math.random() < 0.75) {
+        this.remember(after.name);
+        this.take(after, pos, quat);
+        return;
+      }
+    }
+
     // The previous shot decides whether the line may be crossed now.
     const previousWasNeutral = this.started && this.shot.side === 0;
     if (previousWasNeutral && Math.random() < 0.7) this.side = this.side === 1 ? -1 : 1;
@@ -2058,7 +2285,7 @@ export class CinematicDirector {
       this.scaleIndex = next;
     }
     const want = SCALES[this.scaleIndex];
-    const fighting = this.inCombat(pos);
+    const fighting = this.inCombat(pos) || this.threat !== null;
 
     // A flourish, at the turn of a run — the one place a sharp shot does not
     // interrupt anything. Rarer in a fight, where the fight is the show.
@@ -2120,9 +2347,30 @@ export class CinematicDirector {
     const usable = (s: ShotSpec): boolean => s.name !== this.lastName
       && s.reserved !== true && standable(s) && !this.lacks(s);
 
+    // An act that opened while the last shot was still landing is owed its beat.
+    if (this.takeOwed(pos, quat)) return;
+
+    // The story's own beats, dealt now and again while their act lasts: the
+    // enemy still far off, or the two of them closing head-on.
+    const beatTag = this.act === 'sighting' ? 'sighting' : this.act === 'merge' ? 'merge' : null;
+    if (beatTag !== null && Math.random() < (beatTag === 'merge' ? 0.5 : 0.3)) {
+      const beats = SHOTS.filter((s) => s.tags?.includes(beatTag) === true && s.name !== this.lastName
+        && s.subject !== 'victim' && !this.lacks(s) && !(s.locked && this.wasLocked));
+      if (beats.length > 0) {
+        const fresh = beats.filter((s) => !this.recent.includes(s.name));
+        const from = fresh.length > 0 ? fresh : beats;
+        const b = from[Math.floor(Math.random() * from.length)];
+        this.remember(b.name);
+        this.take(b, pos, quat);
+        return;
+      }
+    }
+
     // The fight or the flight. Mostly the fight while there is one within
     // reach — but not only, or a long dogfight becomes eight setups on a loop.
-    const combatCut = fighting && Math.random() < COMBAT_SHARE;
+    // How much depends on the act: nearly all of it with someone behind you,
+    // little of it in the breath after a kill.
+    const combatCut = fighting && Math.random() < ACT_COMBAT[this.act];
     const kind = (s: ShotSpec): boolean => (combatCut ? isCombat(s) : isScenic(s));
 
     let pool = SHOTS.filter(
@@ -2132,6 +2380,11 @@ export class CinematicDirector {
       // Nothing of this scale for the fight as it stands (no threat, say): any
       // combat setup beats dropping out of the fight for a scenic one.
       pool = SHOTS.filter((s) => usable(s) && isCombat(s) && !(s.locked && this.wasLocked));
+    }
+    // With a bandit on the player's tail, the story is the one behind him.
+    if (combatCut && this.act === 'defence' && Math.random() < 0.6) {
+      const behind = pool.filter((s) => needsThreat(s));
+      if (behind.length > 0) pool = behind;
     }
 
     // Down low, a shot that hangs under the aircraft is a shot of the inside of
@@ -2281,9 +2534,12 @@ export class CinematicDirector {
 
     const t = this.tweakFor(shot.name);
     const hold = shot.seconds ?? HOLD[shot.scale];
+    // The act sets the pace — but not for a reel, whose timing is the
+    // operator's, nor a tripod, whose length is when the pass comes.
+    const pace = this.queue === null && shot.locked !== true ? ACT_HOLD[this.act] : 1;
     this.duration = shot.subject === 'victim'
       ? this.killSeconds
-      : clamp(lerp(hold[0], hold[1], Math.random()) * this.style.hold * t.hold, 1.2, 40);
+      : clamp(lerp(hold[0], hold[1], Math.random()) * this.style.hold * t.hold * pace, 1.2, 40);
     this.elapsed = 0;
     this.lineKnown = false;
     this.bodyYawKnown = false;
@@ -2312,6 +2568,22 @@ export class CinematicDirector {
 
     if (shot.anchor === 'merge') {
       this.plantMerge(shot, pos, quat, t);
+      return;
+    }
+
+    // A tripod for a machine going down: planted in its own track, ahead of
+    // it and below, so it falls past the lens.
+    if (shot.subject === 'victim' && this.victim !== null) {
+      const v = this.victim;
+      const vel = v.velocity;
+      const yaw = vel !== undefined && vel.x * vel.x + vel.z * vel.z > 4
+        ? Math.atan2(-vel.x, -vel.z) : 0;
+      const vs = scaleOf(v.cameraScale);
+      const lf = this.legFrom(shot);
+      this.anchor
+        .set(lf[0] * this.side * vs * t.scale, lf[1] * vs * t.scale + t.height, lf[2] * vs * t.scale)
+        .applyAxisAngle(UP, yaw)
+        .add(v.position);
       return;
     }
 

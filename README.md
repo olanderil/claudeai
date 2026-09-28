@@ -63,10 +63,10 @@ Add `?quality=low|medium|high|ultra` to the URL to pick the graphics preset up f
   back, hangars, AA guns, batteries, MG nests, lorries and dumps with wreck states; bombs.
 - AI pilots that hunt, evade, extend, fly as your wingmen, escort, attack ground targets
   and fly bomber routes with gunners shooting back.
-- Eight fronts — Flanders, Somme, Verdun, Isonzo, Dolomites, Alps, Gallipoli, Sinai —
-  with real relief: the Messines ridge and Kemmel Hill, chalk downs cut by deep river
-  valleys, the Gallipoli ridges and sea cliffs, dune seas under the Judean hills, and
-  3,000 m glaciated peaks around a high pass. Trench systems, shell-cratered
+- Eight fronts — Alps, Sinai, Isonzo, Gallipoli, Dolomites, Somme, Verdun, Flanders —
+  with real relief: 3,000 m glaciated peaks around a high pass, dune seas under the
+  Judaean hills, the Gallipoli ridges and sea cliffs, chalk downs cut by deep river
+  valleys, the Messines ridge and Kemmel Hill. Trench systems, shell-cratered
   no-man's-land, ruined villages, grass aerodromes and streamed 3D trees, under the F18
   sim's sky, clouds, weather, seasons and time of day.
 - A sparse HUD in one language: the enemy in signal cyan — a diamond in the air, a
@@ -78,9 +78,18 @@ Add `?quality=low|medium|high|ultra` to the URL to pick the graphics preset up f
   arriving at the speed of sound, wires singing in a dive.
 
 **Cameras** — chase, cockpit (hold **V** to padlock your target), target view, orbit,
-the automatic cinematic director (with combat shots and kill cams), the director with
-saved shots and a reel, and the free camera. Screenshots and video recording from the
-corner tools.
+the automatic cinematic director, the director with saved shots and a reel, and the free
+camera. Screenshots and video recording from the corner tools.
+
+The cinematic director tells a fight as a story in acts: the **sighting** (over the
+shoulder on a long lens at enemy specks, then the enemy introduced), the **merge** (the
+head-on joust, a tripod where they cross), the **duel** (cutting faster, on his six, down
+the guns), the **reversal** when someone gets on your tail (the tail gunner's view, check
+six), the **kill** (a kill cam or the wreck falling past a tripod, in slow motion for a
+beat) and the **aftermath** (the camera lets you go while the wreck falls away, and the
+cutting slows). It cuts on action — the guns opening up, hits going home, hits taken —
+but never through a shot that hasn't landed yet, and never in a strobe. The title
+screen's dogfight is filmed the same way.
 
 ## Controls
 

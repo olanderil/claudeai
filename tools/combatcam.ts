@@ -29,6 +29,9 @@ type Tel = Parameters<Rig['update']>[2];
 
 const realRandom = Math.random;
 
+/** The shots a kill may be told with. */
+const KILLS = new Set(['kill cam', 'kill orbit', 'the fall']);
+
 let failures = 0;
 const fail = (why: string): void => {
   failures++;
@@ -368,7 +371,7 @@ function spiral(v: ReturnType<typeof makePlane>, start: THREE.Vector3, t: number
       spiral(victim, start, t);
       player.z -= SPEED * DT;
       d.update(DT, player, q, tel, camera, () => 0);
-      if (d.shotName === 'kill cam' || d.shotName === 'kill orbit') {
+      if (KILLS.has(d.shotName)) {
         if (name === '') name = d.shotName;
         held += DT;
         frames++;
@@ -387,7 +390,7 @@ function spiral(v: ReturnType<typeof makePlane>, start: THREE.Vector3, t: number
     if (framed < frames) fail('the victim left the frame during the kill cam');
     if (closest < 5.2) fail(`the kill cam came ${closest.toFixed(1)} m from the victim — inside it`);
     if (lowest < 3) fail('the kill cam went into the ground');
-    if (after === '' || after === 'kill cam' || after === 'kill orbit') fail('the kill cam did not hand back');
+    if (after === '' || KILLS.has(after)) fail('the kill cam did not hand back');
   }
 
   // Through the rig: the cinematic view plays it, the chase view does not
@@ -410,8 +413,8 @@ function spiral(v: ReturnType<typeof makePlane>, start: THREE.Vector3, t: number
   const active = rig.killCamActive;
   fly(120 * 3 + 10);
   console.log(`  cinematic: accepted ${played}, on screen "${during}", active ${active}; after 3 s "${rig.shotName}", active ${rig.killCamActive}`);
-  if (!played || !active || !(during === 'kill cam' || during === 'kill orbit')) fail('the cinematic view did not play the kill cam');
-  if (rig.killCamActive || rig.shotName === 'kill cam' || rig.shotName === 'kill orbit') fail('the cinematic view did not come back from it');
+  if (!played || !active || !KILLS.has(during ?? '')) fail('the cinematic view did not play the kill cam');
+  if (rig.killCamActive || KILLS.has(rig.shotName ?? '')) fail('the cinematic view did not come back from it');
 
   rig.setMode('chase');
   fly(30);
@@ -427,7 +430,7 @@ function spiral(v: ReturnType<typeof makePlane>, start: THREE.Vector3, t: number
   console.log(`  chase: refused by default ${chaseRefused}; with killCamOutside played "${borrowed}", `
     + `and came back to within ${chaseAfter.distanceTo(chaseBefore).toFixed(2)} m of the chase boom`);
   if (!chaseRefused) fail('the chase view gave the camera away without being asked to');
-  if (!chaseAccepted || !(borrowed === 'kill cam' || borrowed === 'kill orbit')) fail('killCamOutside did not play the kill cam');
+  if (!chaseAccepted || !KILLS.has(borrowed ?? '')) fail('killCamOutside did not play the kill cam');
   if (chaseAfter.distanceTo(chaseBefore) > 0.5 || rig.shotName !== null) fail('the chase view did not come back after the kill cam');
   rig.killCamOutside = false;
 
@@ -445,7 +448,7 @@ function spiral(v: ReturnType<typeof makePlane>, start: THREE.Vector3, t: number
   rig.requestShot('kill');
   fly(2);
   console.log(`  requestShot('kill') with a target: "${rig.shotName}"`);
-  if (!(rig.shotName === 'kill cam' || rig.shotName === 'kill orbit')) fail("requestShot('kill') did not play the kill cam");
+  if (!KILLS.has(rig.shotName ?? '')) fail("requestShot('kill') did not play the kill cam");
   rig.setCombatContext({ target: null, threat: null });
 }
 
@@ -483,41 +486,85 @@ console.log('\nTHE COMBAT SHOTS — dealt in a fight, never outside one');
     console.log(`  ${label}: ${share.toFixed(0)}% of ${cuts} cuts were combat setups (${seen.size} different)`);
     if (range < COMBAT_RANGE && share < 55) fail(`in a fight only ${share.toFixed(0)}% of cuts were about it`);
     if (range < COMBAT_RANGE && seen.size < 7) fail(`the fight was shot from only ${seen.size} setups`);
-    const needy = shotCatalogue().filter((s) => s.needsTarget).map((s) => s.name);
+    // The sighting beats are the exception, and the point: the enemy as specks.
+    const needy = shotCatalogue().filter((s) => s.needsTarget && s.beat !== 'sighting').map((s) => s.name);
     if (range > COMBAT_RANGE && needy.some((n) => seen.has(n))) fail('target shots were dealt with the enemy out of reach');
   }
 
-  // A fight opening is cut to: the first time a bandit comes well inside
-  // reach, the sequence goes straight to an engagement shot.
-  console.log('\n  a bandit closing from two kilometres');
+  // The story: a bandit seen far off, then closing head-on. The sighting is
+  // cut to while he is still a speck, the merge as they close — and the
+  // story's acts go patrol, sighting, merge in that order.
+  console.log('\n  a bandit sighted, then closing head-on');
   {
     Math.random = realRandom;
-    const engage = new Set(['guns-eye', 'on his six', 'wingman view', 'crossing']);
-    let cutTo = '';
-    let range = 0;
-    let crossed = -1;
+    const merges = new Set(shotCatalogue().filter((s) => s.beat === 'merge').map((s) => s.name).concat('crossing'));
+    const sightings = new Set(shotCatalogue().filter((s) => s.beat === 'sighting').map((s) => s.name));
+    let sighted = '';
+    let sightedAt = 0;
+    let merged = '';
+    let mergedAt = 0;
+    const acts: string[] = [];
     const d = new CinematicDirector();
     const player = makePlane();
     const target = makePlane();
     for (let i = 0; i < 120 * 40; i++) {
       const t = i * DT;
       straight(player, new THREE.Vector3(0, ALT, 0), new THREE.Vector3(0, 0, -SPEED), t);
-      straight(target, new THREE.Vector3(30, ALT + 40, -2000), new THREE.Vector3(0, 0, SPEED), t);
-      d.setCombat({ target: { position: target.root.position, velocity: target.velocity }, threat: null });
+      // Nobody about for the first six seconds, then the bandit, far out.
+      const there = t > 6;
+      straight(target, new THREE.Vector3(30, ALT + 40, -2600), new THREE.Vector3(0, 0, SPEED), t);
+      d.setCombat({ target: there ? { position: target.root.position, velocity: target.velocity } : null, threat: null });
       const before = d.shotName;
       d.update(DT, player.root.position, player.root.quaternion, tel, camera, () => 0,
         { velocity: player.velocity });
+      if (acts[acts.length - 1] !== d.currentAct) acts.push(d.currentAct);
       const gap = player.root.position.distanceTo(target.root.position);
-      // The frame the bandit comes inside four-fifths of the combat range, and
-      // the one after: the cut has to be there.
-      if (crossed < 0 && gap < COMBAT_RANGE * 0.8) crossed = i;
-      if (crossed >= 0 && i <= crossed + 1 && d.shotName !== before) {
-        cutTo = d.shotName;
-        range = gap;
+      if (d.shotName !== before && !sighted && sightings.has(d.shotName)) {
+        sighted = d.shotName;
+        sightedAt = gap;
+      }
+      if (d.shotName !== before && !merged && merges.has(d.shotName)) {
+        merged = d.shotName;
+        mergedAt = gap;
       }
     }
-    console.log(`  cut to "${cutTo || 'nothing'}" as the bandit came inside ${range.toFixed(0)} m`);
-    if (!engage.has(cutTo)) fail('the fight opening was not cut to an engagement shot');
+    console.log(`  acts: ${acts.join(' → ')}`);
+    console.log(`  sighted with "${sighted || 'nothing'}" at ${sightedAt.toFixed(0)} m; `
+      + `the merge with "${merged || 'nothing'}" at ${mergedAt.toFixed(0)} m`);
+    if (acts.slice(0, 3).join() !== 'patrol,sighting,merge') fail('the acts did not run patrol, sighting, merge');
+    if (!sighted || sightedAt < COMBAT_RANGE) fail('the enemy was not sighted while still far off');
+    if (!merged || mergedAt > COMBAT_RANGE * 1.7) fail('the merge was not cut to as they closed');
+  }
+
+  // The kill, told: slow motion for a beat, then the breath afterwards.
+  console.log('\n  a kill, and the breath after it');
+  {
+    Math.random = realRandom;
+    const d = new CinematicDirector();
+    const player = makePlane();
+    const victim = makePlane();
+    let slowest = 1;
+    let after = '';
+    const acts = new Set<string>();
+    for (let i = 0; i < 120 * 14; i++) {
+      const t = i * DT;
+      circle(player, C, 150, 0, 1, t);
+      if (i === 120 * 3) {
+        d.setCombat({ target: null, threat: null });
+        d.killCam({ position: victim.root.position, velocity: victim.velocity }, 3.2);
+      }
+      straight(victim, new THREE.Vector3(80, ALT - 20 - Math.max(0, t - 3) * 15, 0),
+        new THREE.Vector3(0, -15, -30), 0);
+      d.update(DT, player.root.position, player.root.quaternion, tel, camera, () => 0,
+        { velocity: player.velocity });
+      slowest = Math.min(slowest, d.timeWarp);
+      acts.add(d.currentAct);
+      if (i > 120 * 3 + 5 && !after && !KILLS.has(d.shotName)) after = d.shotName;
+    }
+    console.log(`  slowest ${slowest.toFixed(2)}×; after the kill cam: "${after}"; acts ${[...acts].join(', ')}`);
+    if (slowest > 0.5) fail('the kill was not taken in slow motion');
+    if (d.timeWarp !== 1) fail('the slow motion did not end');
+    if (!acts.has('aftermath')) fail('there was no breath after the kill');
   }
 
   // Every shot that frames the pair, forced, in a turning fight: both in
@@ -634,19 +681,27 @@ console.log('\nTHE COMBAT SHOTS — dealt in a fight, never outside one');
   {
     Math.random = realRandom;
     const got = new Set<string>();
+    let held = 0;
     for (let k = 0; k < 20; k++) {
       const d = new CinematicDirector();
       const player = makePlane();
       circle(player, C, 150, 0, 1, 0);
       circle(threatPlane, C, 150, -0.6, 1, 0);
       d.setCombat({ target: null, threat: { position: threatPlane.root.position } });
-      d.update(DT, player.root.position, player.root.quaternion, tel, camera, () => 0);
+      // Let the shot on screen land first: the fight's cuts wait for that.
+      for (let i = 0; i < 120 * 1.6; i++) d.update(DT, player.root.position, player.root.quaternion, tel, camera, () => 0);
+      const before = d.shotName;
       d.request('hit');
       d.update(DT, player.root.position, player.root.quaternion, tel, camera, () => 0);
-      got.add(d.shotName);
+      // On the man behind — cut to, or already there because the act opened
+      // with him — or held: a shot still landing.
+      if (d.shotName === 'tail gunner' || d.shotName === 'check six') got.add(d.shotName);
+      else if (d.shotName === before) held++;
+      else got.add(d.shotName);
     }
-    console.log(`  cut to: ${[...got].join(', ')}`);
+    console.log(`  on: ${[...got].join(', ')}${held > 0 ? `; held ${held} of 20` : ''}`);
     if (![...got].every((n) => n === 'tail gunner' || n === 'check six')) fail("'hit' did not cut to the threat");
+    if (held > 10) fail("'hit' was ignored more often than not");
   }
 }
 
