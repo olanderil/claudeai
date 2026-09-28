@@ -1265,13 +1265,19 @@ function boot(): void {
     enterFlight();
   }
 
-  /** Watch from the main menu: a quick battle flown by the autopilot. */
-  function startWatch(): void {
-    // Watching is for the picture, so it takes the whole screen. Called from
-    // the menu's click, which is the gesture the browser needs for this.
+  /**
+   * Watching is for the picture, so it takes the whole screen. Only from a
+   * click — the browser insists on the gesture — and asked for first, before
+   * anything slow, while the click still counts as one.
+   */
+  function enterFullscreen(): void {
     if (document.fullscreenElement === null) {
       document.documentElement.requestFullscreen?.()?.catch(() => undefined);
     }
+  }
+
+  /** Watch from the main menu: a quick battle flown by the autopilot. */
+  function startWatch(): void {
     world.prime(new THREE.Vector3(0, 0, 0));
     game.startQuickBattle(menus.team, menus.aircraft);
     game.setAutopilot(true);
@@ -1343,10 +1349,60 @@ function boot(): void {
     game.mouseFire = false;
   }
 
+  /**
+   * Every way in from the main menu — Quick Battle, Bombers, Watch — draws a
+   * new day: a front, a seed, an hour, a sky and a season. Weighted so most
+   * draws are good flying and some are dramatic: blue hour, fog banks and
+   * thunderstorms turn up, but not most of the time, and not all at once.
+   */
+  function randomizeWorld(): void {
+    const draw = (names: readonly string[], weight: (name: string) => number): number => {
+      const w = names.map((n) => Math.max(0, weight(n)));
+      let r = Math.random() * w.reduce((a, b) => a + b, 0);
+      for (let i = 0; i < w.length; i++) {
+        r -= w[i];
+        if (r <= 0) return i;
+      }
+      return 0;
+    };
+    const front = Math.floor(Math.random() * WORLD_PRESETS.length);
+    const desert = WORLD_PRESETS[front].name === 'SINAI';
+    const hour = draw(TIME_PRESETS.map((p) => p.name), (n) => ({
+      DAWN: 1, MORNING: 1.4, NOON: 1.1, GOLDEN: 1.5, DUSK: 1, 'BLUE HOUR': 0.35,
+    } as Record<string, number>)[n] ?? 1);
+    const dark = TIME_PRESETS[hour].name === 'BLUE HOUR';
+    const sky = draw(WEATHER_PRESETS.map((p) => p.name), (n) => {
+      const base = ({
+        CLEAR: 1.2, CLOUDS: 1.7, CIRRUS: 0.8, HAZY: 0.9, FOG: 0.5, INVERSION: 0.6,
+        OVERCAST: 0.7, RAIN: 0.5, STORM: 0.35,
+      } as Record<string, number>)[n] ?? 1;
+      // Fog or a storm in the dark is no light to fight by; rain is rare in the desert.
+      if (dark && (n === 'FOG' || n === 'STORM' || n === 'RAIN')) return base * 0.15;
+      if (desert && (n === 'RAIN' || n === 'STORM' || n === 'FOG' || n === 'INVERSION')) return base * 0.2;
+      return base;
+    });
+    const season = draw(SEASON_PRESETS.map((p) => p.name), (n) => (desert && n === 'WINTER' ? 0.3 : n === 'WINTER' ? 0.8 : 1));
+    world.setWorld(front);
+    world.regenerate();
+    world.setTimeOfDay(hour);
+    world.setWeather(sky);
+    world.setSeason(season);
+  }
+
   const menus = new Menus({
-    quickBattle: () => startQuickBattle(),
-    bombers: () => startBombers(),
-    watch: () => startWatch(),
+    quickBattle: () => {
+      randomizeWorld();
+      startQuickBattle();
+    },
+    bombers: () => {
+      randomizeWorld();
+      startBombers();
+    },
+    watch: () => {
+      enterFullscreen();
+      randomizeWorld();
+      startWatch();
+    },
     fly: (m) => startMission(m),
     resume: () => pause(false),
     restart: () => restart(),

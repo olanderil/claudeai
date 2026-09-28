@@ -48,6 +48,11 @@ Add `?quality=low|medium|high|ultra` to the URL to pick the graphics preset up f
   objectives) while the cinematic director films it. Any stick input takes it back;
   slow it down to 0.25× from the bar.
 
+Every start from the main menu — Quick Battle, Bombers or Watch — draws a new day: a
+random front and seed, hour, weather and season (weighted toward good flying, with blue
+hour, fog and storms turning up now and then). The World and Style tabs change them
+in flight; the campaign's sorties keep their own.
+
 **Opponents** — pick the enemy's level on the main menu (or in the Controls tab):
 - **Recruit** — green pilots in smaller formations, softer hits and wilder flak. Your
   guns don't jam, rounds near the lead pip are nudged onto the target, and the machine
