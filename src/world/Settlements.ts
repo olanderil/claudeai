@@ -113,6 +113,12 @@ export interface SettlementOptions {
    * is rebuilt as one. Omitted: no town.
    */
   town?: (x: number, z: number) => number;
+  /**
+   * The roughest standard a site may be held to (index into the tiers). In
+   * high mountains fewer villages on the valley floors beat villages hung
+   * on the walls. Defaults to the loosest.
+   */
+  maxTier?: number;
 }
 
 // -------------------------------------------------------------------- geometry
@@ -414,7 +420,8 @@ export function planSettlements(
   let candidates: Candidate[] = [];
   let tier = TIERS[0];
 
-  for (let t = 0; t < TIERS.length; t++) {
+  const tiers = Math.min(TIERS.length, (opts.maxTier ?? TIERS.length - 1) + 1);
+  for (let t = 0; t < tiers; t++) {
     tier = TIERS[t];
     const floor = Math.max(4, minElevation - tier.below);
     const ceiling = maxElevation + tier.above;
@@ -809,9 +816,14 @@ function layoutHouses(v: Village, height: (x: number, z: number) => number): voi
     if (rnd(100 + s) > (v.town ? 0.95 : 0.8)) continue;
 
     const [lx, lz] = slots[s];
+    const ox = lx + (rnd(200 + s) - 0.5) * 16;
+    const oz = lz + (rnd(300 + s) - 0.5) * 13;
+    // Nobody builds on a bank steeper than about one in three: in hill
+    // country the village keeps to its shelf and the slope stays empty.
+    if (steepPlot(v.x + ox * cos - oz * sin, v.z + ox * sin + oz * cos, height)) continue;
     place(
-      lx + (rnd(200 + s) - 0.5) * 16,
-      lz + (rnd(300 + s) - 0.5) * 13,
+      ox,
+      oz,
       s,
       8 + rnd(400 + s) * 5,
       7 + rnd(500 + s) * 4,
@@ -819,6 +831,16 @@ function layoutHouses(v: Village, height: (x: number, z: number) => number): voi
       2.6 + rnd(800 + s) * 1.8,
     );
   }
+}
+
+/** Whether a house plot here would stand on a bank rather than a shelf. */
+function steepPlot(x: number, z: number, height: (x: number, z: number) => number): boolean {
+  const h = height(x, z);
+  const e = 7;
+  return Math.max(
+    Math.abs(height(x + e, z) - h), Math.abs(height(x - e, z) - h),
+    Math.abs(height(x, z + e) - h), Math.abs(height(x, z - e) - h),
+  ) > e * 0.36;
 }
 
 // --------------------------------------------------------------------- geometry

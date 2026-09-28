@@ -267,6 +267,26 @@ function trace(
   return nodes;
 }
 
+/**
+ * Lay a river down a course the world was built around — a valley cut on
+ * purpose — rather than tracing one. `pts` run downstream as x, z and the
+ * valley floor there; the floor is held non-increasing, exactly as a trace
+ * holds its bed, so the channel is carved and painted the same way. Call
+ * after `planRivers`, which clears the network.
+ */
+export function addRiverPath(pts: [number, number, number][], widthNear: number, widthFar: number): void {
+  if (settings === null || pts.length < 2) return;
+  const nodes: Node[] = [];
+  let y = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const [x, z, floor] = pts[i];
+    y = Math.min(y, floor);
+    nodes.push({ x, z, y, w: lerp(widthNear, widthFar, i / (pts.length - 1)) });
+  }
+  paths.push(nodes);
+  addRiver(nodes);
+}
+
 function addRiver(nodes: Node[], canal = false): void {
   for (let i = 0; i < nodes.length - 1; i++) {
     const a = nodes[i];

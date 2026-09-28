@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import { clamp, lerp, smoothstep } from '../util/math';
 import { fbm } from '../util/noise';
+import { terrainHeight } from './Worlds';
 
 /** Side length of the tile the cloud field repeats over, metres. */
 export const FIELD = 26000;
+/** Furthest a puff is raised to clear the ground before it fades instead, metres. */
+const LIFT_MAX = 350;
 /** Puffs per cloud cluster. */
 const PER_CLUSTER = 14;
 
@@ -116,6 +119,27 @@ export class Clouds {
   private readonly seedSrc: Float32Array;
   private readonly order: number[] = [];
 
+  /**
+   * Each puff's height once lifted clear of the ground under it, how much of
+   * it survives, and the wrapped position and size it was worked out for.
+   *
+   * The cumulus deck sits at 1.5–2.8 km, which is sky over Flanders and solid
+   * rock in the Alps: a billboard standing in a mountainside is cut off in a
+   * straight line by the depth test, and reads as a white slab stuck into the
+   * peak. So a puff over rising ground is raised a little until its body
+   * clears it — cap cloud on a summit — and one that would need raising a
+   * long way, because it is really inside the mountain, fades away instead of
+   * lying on the slope like fog. Only redone when a puff wraps to a new place
+   * or the weather resizes it, so the cost is a few ground samples now and
+   * then, not per frame.
+   */
+  private readonly liftX: Float32Array;
+  private readonly liftZ: Float32Array;
+  private readonly liftY: Float32Array;
+  private readonly liftFloor: Float32Array;
+  private readonly liftFade: Float32Array;
+  private readonly liftScale: Float32Array;
+
   private readonly _m = new THREE.Matrix4();
   private readonly _pos = new THREE.Vector3();
   private readonly _lastSort = new THREE.Vector3(Infinity, 0, Infinity);
@@ -129,6 +153,12 @@ export class Clouds {
 
     const shade = new Float32Array(maxPuffs);
     const seed = new Float32Array(maxPuffs);
+    this.liftX = new Float32Array(maxPuffs).fill(NaN);
+    this.liftZ = new Float32Array(maxPuffs);
+    this.liftY = new Float32Array(maxPuffs);
+    this.liftFloor = new Float32Array(maxPuffs);
+    this.liftFade = new Float32Array(maxPuffs).fill(1);
+    this.liftScale = new Float32Array(maxPuffs);
     this.shadeSrc = new Float32Array(maxPuffs);
     this.seedSrc = new Float32Array(maxPuffs);
 
@@ -172,6 +202,8 @@ export class Clouds {
     geometry.attributes.uv = quad.attributes.uv;
     geometry.setAttribute('aShade', new THREE.InstancedBufferAttribute(shade, 1));
     geometry.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seed, 1));
+    geometry.setAttribute('aFloor', new THREE.InstancedBufferAttribute(new Float32Array(maxPuffs).fill(-1e5), 1));
+    geometry.setAttribute('aFade', new THREE.InstancedBufferAttribute(new Float32Array(maxPuffs).fill(1), 1));
 
     this.material = createCloudMaterial();
     this.mesh = new THREE.InstancedMesh(geometry, this.material, maxPuffs);
@@ -230,6 +262,32 @@ export class Clouds {
       this.sizeScale = sizeScale;
       this._lastSort.set(Infinity, 0, Infinity); // force the matrices to be rewritten
     }
+  }
+
+  /** The ground has changed shape (new world or seed): lift every puff afresh. */
+  groundChanged(): void {
+    this.liftX.fill(NaN);
+    this._lastSort.set(Infinity, 0, Infinity);
+  }
+
+  /** How high a puff must sit to clear the ground round (x, z), and that ground. */
+  private lift(i: number, x: number, z: number): void {
+    const r = this.radius[i] * this.sizeScale;
+    // The drawn disc reaches about half the billboard's scale.
+    const reach = r * 0.5;
+    let ground = terrainHeight(x, z);
+    for (let k = 0; k < 4; k++) {
+      const a = k * Math.PI * 0.5 + 0.4;
+      const h = terrainHeight(x + Math.cos(a) * reach, z + Math.sin(a) * reach);
+      if (h > ground) ground = h;
+    }
+    this.liftX[i] = x;
+    this.liftZ[i] = z;
+    this.liftScale[i] = this.sizeScale;
+    this.liftFloor[i] = ground;
+    const need = ground + r * 0.42 - this.base[i * 3 + 1];
+    this.liftY[i] = this.base[i * 3 + 1] + Math.min(Math.max(need, 0), LIFT_MAX);
+    this.liftFade[i] = 1 - smoothstep(LIFT_MAX, LIFT_MAX + 450, need);
   }
 
   /** Cap the puff count for the quality preset. */
@@ -334,8 +392,11 @@ export class Clouds {
       // Nearest repeat of this puff's home position to the camera.
       const x = this.base[i * 3] + FIELD * Math.round((cam.x - this.base[i * 3]) / FIELD);
       const z = this.base[i * 3 + 2] + FIELD * Math.round((cam.z - this.base[i * 3 + 2]) / FIELD);
+      if (this.liftX[i] !== Math.fround(x) || this.liftZ[i] !== Math.fround(z) || this.liftScale[i] !== Math.fround(this.sizeScale)) {
+        this.lift(i, x, z);
+      }
       wrapped[i * 3] = x;
-      wrapped[i * 3 + 1] = this.base[i * 3 + 1];
+      wrapped[i * 3 + 1] = this.liftY[i];
       wrapped[i * 3 + 2] = z;
     }
 
@@ -355,8 +416,12 @@ export class Clouds {
 
     const shade = this.mesh.geometry.getAttribute('aShade') as THREE.InstancedBufferAttribute;
     const seed = this.mesh.geometry.getAttribute('aSeed') as THREE.InstancedBufferAttribute;
+    const floor = this.mesh.geometry.getAttribute('aFloor') as THREE.InstancedBufferAttribute;
+    const fade = this.mesh.geometry.getAttribute('aFade') as THREE.InstancedBufferAttribute;
+    const fadeOut = new Float32Array(count);
     const shadeOut = new Float32Array(count);
     const seedOut = new Float32Array(count);
+    const floorOut = new Float32Array(count);
 
     for (let slot = 0; slot < count; slot++) {
       const i = this.order[slot];
@@ -367,12 +432,18 @@ export class Clouds {
       this.mesh.setMatrixAt(slot, this._m);
       shadeOut[slot] = this.shadeSrc[i];
       seedOut[slot] = this.seedSrc[i];
+      floorOut[slot] = this.liftFloor[i];
+      fadeOut[slot] = this.liftFade[i];
     }
 
     shade.array.set(shadeOut);
     seed.array.set(seedOut);
+    floor.array.set(floorOut);
+    fade.array.set(fadeOut);
+    fade.needsUpdate = true;
     shade.needsUpdate = true;
     seed.needsUpdate = true;
+    floor.needsUpdate = true;
     this.mesh.instanceMatrix.needsUpdate = true;
   }
 
@@ -615,6 +686,10 @@ function createCloudMaterial(): THREE.ShaderMaterial {
       uniform vec3 uCam;
       attribute float aShade;
       attribute float aSeed;
+      attribute float aFloor;
+      attribute float aFade;
+      varying float vLift;
+      varying float vFade;
       varying vec2 vUv;
       varying float vShade;
       varying float vSeed;
@@ -633,6 +708,9 @@ function createCloudMaterial(): THREE.ShaderMaterial {
         vec3 right = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
         vec3 up    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
         vec3 world = centre + (right * position.x + up * position.y) * scale;
+        // Height over the highest ground under the puff, in puff sizes.
+        vLift = (world.y - aFloor) / scale;
+        vFade = aFade;
 
         // Horizontal distance only. The fade is about the edge of the tile,
         // which is a distance across the ground — measured in three dimensions
@@ -666,6 +744,8 @@ function createCloudMaterial(): THREE.ShaderMaterial {
       varying float vSeed;
       varying float vFogDepth;
       varying float vGround;
+      varying float vLift;
+      varying float vFade;
 
       float hash(vec2 p) {
         p = fract(p * vec2(443.897, 441.423));
@@ -692,6 +772,9 @@ function createCloudMaterial(): THREE.ShaderMaterial {
         float alpha = smoothstep(1.0, 0.12, r) * (0.55 + 0.45 * n);
         // Gone before the tile edge, where the far deck has already taken over.
         alpha *= 1.0 - smoothstep(HANDOVER_IN, HANDOVER_OUT, vGround);
+        // Thinning out into the ground rather than stopping at it: whatever
+        // of the fringe still reaches below the summits it was lifted over.
+        alpha *= smoothstep(-0.06, 0.1, vLift) * vFade;
         if (alpha < 0.01) discard;
 
         // Cheap volume shading: bright tops, cooler bases, and a brighter edge

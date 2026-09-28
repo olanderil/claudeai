@@ -101,10 +101,14 @@ export function planRoads(nodes: RoadNode[], opts: RoadOptions): void {
   for (const [i, j] of edges) {
     const a = nodes[i];
     const b = nodes[j];
-    if (!routeOk(a.x, a.z, b.x, b.z, opts)) continue;
+    // The course as it will be laid, bends and all: in hill country a bend
+    // can put a straight-line-clear road over the edge of a bluff.
+    const pts: [number, number][] = [[a.x, a.z], ...bends(a.x, a.z, b.x, b.z, i * 131 + j, seed), [b.x, b.z]];
+    let ok = true;
+    for (let k = 0; k < pts.length - 1 && ok; k++) ok = routeOk(pts[k][0], pts[k][1], pts[k + 1][0], pts[k + 1][1], opts);
+    if (!ok) continue;
     const lined = hash01(i, j, seed + 5) < opts.lined;
-    addRoad([[a.x, a.z], ...bends(a.x, a.z, b.x, b.z, i * 131 + j, seed), [b.x, b.z]],
-      lined ? 2.9 : 2.4, lined, road++);
+    addRoad(pts, lined ? 2.9 : 2.4, lined, road++);
   }
 
   for (const e of opts.extra ?? []) addRoad(e.pts, e.half, e.lined, road++);

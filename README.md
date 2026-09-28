@@ -1,6 +1,6 @@
 # Horizon 1917
 
-**Seven fronts. Open skies. No quarter given.**
+**Eight fronts. Open skies. No quarter given.**
 
 A First World War air-combat game in the browser. Fly a Sopwith Camel or SPAD S.XIII
 for the Royal Flying Corps, or a Fokker Dr.I or Albatros D.V for the Luftstreitkräfte,
@@ -30,13 +30,24 @@ Add `?quality=low|medium|high|ultra` to the URL to pick the graphics preset up f
 - **Quick Battle** — offensive patrol against endless, escalating waves of enemy scouts,
   with an ace leading from the third wave. Kite balloons over the enemy lines for the taking.
   Three machines; land at your aerodrome and stop to refit.
-- **Campaign** — seven sorties, each with its own front, hour and weather, briefed from
+- **Campaign** — eight sorties, each with its own front, hour and weather, briefed from
   whichever side you fly for: Dawn Patrol (Flanders), Balloon Busting (Somme), Escort
   (Isonzo), Trench Strafing (Verdun), Night Intercept — a Zeppelin under searchlights
-  (Dolomites), Aerodrome Raid (Sinai) and The Ace (Morlancourt Ridge).
+  (Dolomites), Aerodrome Raid (Sinai), The Ace (Morlancourt Ridge) and The White War —
+  guns on a glacier pass (Alps).
 - **Watch** — the autopilot flies your machine through the fight (or the mission's
   objectives) while the cinematic director films it. Any stick input takes it back;
   slow it down to 0.25× from the bar.
+
+**Opponents** — pick the enemy's level on the main menu (or in the Controls tab):
+- **Recruit** — green pilots in smaller formations, softer hits and wilder flak. Your
+  guns don't jam, rounds near the lead pip are nudged onto the target, and the machine
+  won't pull into a stall. Half score.
+- **Pilot** — the squadron average. The game as tuned.
+- **Veteran** — bigger formations of pilots who check their tails, break into you and
+  lead their shots. An ace from the second wave. Score ×1.5.
+- **Ace** — every formation led by an ace, marksmen who never fly straight for long;
+  flak finds your height fast. Double score.
 
 **The war**
 - Six aircraft modelled and painted procedurally: Camel, SPAD, Dr.I, Albatros, DH.4
@@ -52,9 +63,17 @@ Add `?quality=low|medium|high|ultra` to the URL to pick the graphics preset up f
   back, hangars, AA guns, batteries, MG nests, lorries and dumps with wreck states; bombs.
 - AI pilots that hunt, evade, extend, fly as your wingmen, escort, attack ground targets
   and fly bomber routes with gunners shooting back.
-- Seven fronts — Flanders, Somme, Verdun, Isonzo, Dolomites, Gallipoli, Sinai — with
-  trench systems, shell-cratered no-man's-land, ruined villages, grass aerodromes and
-  streamed 3D trees, under the F18 sim's sky, clouds, weather, seasons and time of day.
+- Eight fronts — Flanders, Somme, Verdun, Isonzo, Dolomites, Alps, Gallipoli, Sinai —
+  with real relief: the Messines ridge and Kemmel Hill, chalk downs cut by deep river
+  valleys, the Gallipoli ridges and sea cliffs, dune seas under the Judean hills, and
+  3,000 m glaciated peaks around a high pass. Trench systems, shell-cratered
+  no-man's-land, ruined villages, grass aerodromes and streamed 3D trees, under the F18
+  sim's sky, clouds, weather, seasons and time of day.
+- A sparse HUD in one language: the enemy in signal cyan — a diamond in the air, a
+  circle for a balloon, a square on the ground — with lock marks that close in as the
+  target comes into range, a hairline to the lead pip, pointers on a ring around the
+  sight for what's off screen, and an amber arc on that ring when someone is on your
+  tail. Wingmen get an ivory chevron and a letter; objectives a brass caret.
 - Procedural sound: rotary blip-switch, inline drone, Vickers and Spandau, flak, explosions
   arriving at the speed of sound, wires singing in a dive.
 

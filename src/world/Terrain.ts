@@ -87,6 +87,8 @@ export class Terrain {
     uFarm: { value: 0.8 },
     /** Bare limestone breaking through thin soil, 0..1 (karst, scrub coasts). */
     uStony: { value: 0 },
+    /** How readily slopes go to bare rock, 0..1 — chalk bluffs, gully walls. */
+    uBluff: { value: 0 },
   };
 
   private readonly cache = new Map<string, THREE.Mesh>();
@@ -115,7 +117,7 @@ export class Terrain {
 
   setStyle(
     style: TerrainStyle,
-    extra: { beach: number; timber: [number, number, number]; farm: number; stony: number },
+    extra: { beach: number; timber: [number, number, number]; farm: number; stony: number; bluffs?: number },
   ): void {
     this.styleUniforms.uGrass.value.set(...style.grass);
     this.styleUniforms.uDry.value.set(...style.dry);
@@ -127,6 +129,7 @@ export class Terrain {
     this.styleUniforms.uTimber.value.set(...extra.timber);
     this.styleUniforms.uFarm.value = extra.farm;
     this.styleUniforms.uStony.value = extra.stony;
+    this.styleUniforms.uBluff.value = extra.bluffs ?? 0;
   }
 
   /**
@@ -651,6 +654,7 @@ function createTerrainMaterial(
          uniform vec3 uTimber;
          uniform float uFarm;
          uniform float uStony;
+         uniform float uBluff;
 
          float tHash(vec2 p) {
            p = fract(p * vec2(123.34, 456.21));
@@ -715,9 +719,16 @@ function createTerrainMaterial(
            vec3 col = grass;
            col = mix(sand, col, smoothstep(uBeach - 10.0, uBeach, h));
            col = mix(col, dry, smoothstep(uTreeLine - 290.0, uTreeLine + 290.0, h + broad * 260.0));
-           col = mix(col, rock, smoothstep(0.32, 0.66, slope + broad * 0.12));
-           float snowLine = smoothstep(uSnowLine, uSnowLine + 400.0, h + broad * 160.0)
-                          * (1.0 - smoothstep(0.55, 0.85, slope));
+           // Bare rock on the steeps. Where the world has bluffs — chalk,
+           // raw gully walls — it shows on banks a cliff would be needed for
+           // elsewhere.
+           col = mix(col, rock, smoothstep(mix(0.32, 0.085, uBluff), mix(0.66, 0.3, uBluff), slope + broad * 0.12));
+           // Snow lies in patches at its edge rather than as a thin wash over
+           // everything, and it does not stick to the steeps: in rocky
+           // country (bluffs) the crags stand dark out of the snowfields.
+           float snowAlt = smoothstep(uSnowLine - 120.0, uSnowLine + 420.0, h + broad * 160.0);
+           float snowLine = smoothstep(0.42, 0.6, snowAlt + (mottle - 0.5) * 0.55 + (fine - 0.5) * 0.25)
+                          * (1.0 - smoothstep(mix(0.55, 0.0, uBluff), mix(0.85, 0.2, uBluff), slope + (fine - 0.5) * 0.08));
            col = mix(col, snow, snowLine);
 
            // Limestone breaking through thin soil: grey pavement, scrub and
@@ -731,6 +742,11 @@ function createTerrainMaterial(
              float scrubVis = 1.0 - smoothstep(0.4, 2.5, fw);
              col *= mix(1.0, 0.75 + 0.35 * tNoise(wp * 0.35), scrubVis * uStony * 0.7);
            }
+
+           // Rough grazing on the banks: steep ground is never ploughed and
+           // reads darker and coarser than the fields above and below it —
+           // most of what makes a valley side legible from the air.
+           col *= mix(1.0, 0.8, smoothstep(0.03, 0.16, slope) * (1.0 - snowLine) * (1.0 - smoothstep(0.3, 0.5, slope)));
 
            if (uStrata > 0.0) {
              float band = 0.5 + 0.5 * sin(h * 0.0555 + broad * 1.4);
@@ -910,7 +926,8 @@ function createTerrainMaterial(
            if (uFrontOn > 0.5 && bfU < 3200.0) {
              float craters = uFrontCfg.y;
              float chalk = uFrontCfg.z;
-             float flooded = uFrontCfg.w;
+             // Water lies in the low ground only: a ridge drains.
+             float flooded = uFrontCfg.w * bfFloodAt(h);
              float u = bfU;
              float s = wp.x;
              float steep = smoothstep(0.42, 0.72, slope);
@@ -928,6 +945,12 @@ function createTerrainMaterial(
              vec3 spoil = mix(soil * 1.4, chalkC, chalk * 0.9);
              spoil = mix(spoil, uGrass * 1.08, sandy);
              dark = mix(dark, uGrass * 0.62, sandy * 0.6);
+             // On snow and bare rock what the shells turn up is not earth:
+             // grey rubble, blackened scree, dirty snow.
+             float alp = max(snowLine, smoothstep(0.4, 0.7, slope) * 0.6);
+             soil = mix(soil, rock * 0.52, alp * 0.75);
+             dark = mix(dark, rock * 0.3, alp * 0.6);
+             spoil = mix(spoil, mix(rock * 0.9, snow * 0.82, snowLine * 0.5), alp * 0.8);
 
              float clodVis = 1.0 - smoothstep(0.25, 1.2, fw);
              float c1 = tFbm(wp * 0.075);
@@ -940,6 +963,9 @@ function createTerrainMaterial(
              churned *= mix(1.0, 0.84 + 0.32 * tNoise(wp * 2.1), clodVis);
              // Wet patches where the water lies.
              churned = mix(churned, dark * 0.7, smoothstep(0.62, 0.8, lowNoise) * flooded * 0.6);
+             // A shelled snowfield stays mostly snow, trodden and sooted grey.
+             churned = mix(churned, snow * (0.66 + 0.16 * c1), snowLine * 0.55);
+             blight *= 1.0 - snowLine;
 
              vec3 weeds = mix(col, mix(uDry * 0.78, uGrass * 0.85, 0.45), 0.6);
              col = mix(col, weeds, blight * 0.75);
@@ -1135,8 +1161,13 @@ function createTerrainMaterial(
            // Crater bowls and rims, lit properly: the slope of each bowl added
            // to the world normal and taken back into view space.
            if (dot(bfGrad, bfGrad) > 1e-6) {
+             // Added as a height gradient to the slope's own (un-normalised,
+             // y = 1) normal, so a bowl on a hillside is lit as a bowl on a
+             // hillside; and faded on the steeps, where the paint fades too.
              vec3 nW = normalize(vTerrainNormal);
-             nW = normalize(nW + vec3(-bfGrad.x, 0.0, -bfGrad.y) * (1.0 - bfWater));
+             float onSlope = 1.0 - smoothstep(0.42, 0.72, 1.0 - clamp(nW.y, 0.0, 1.0));
+             nW = nW / max(nW.y, 0.25);
+             nW = normalize(nW + vec3(-bfGrad.x, 0.0, -bfGrad.y) * (1.0 - bfWater) * onSlope);
              normal = normalize((viewMatrix * vec4(nW, 0.0)).xyz);
            }
            // Fine surface relief the geometry is far too coarse to carry.
@@ -1165,7 +1196,9 @@ function createTerrainMaterial(
         `#include <roughnessmap_fragment>
          {
            float slope = 1.0 - clamp(vTerrainNormal.y, 0.0, 1.0);
-           roughnessFactor = mix(0.96, 0.78, smoothstep(0.3, 0.7, slope));
+           // Wet rock takes a sheen; chalk and dry crag (bluffs) stay matt, or a
+           // white bluff reads as a sheet of water at a grazing angle.
+           roughnessFactor = mix(0.96, 0.78, smoothstep(0.3, 0.7, slope) * (1.0 - uBluff));
            roughnessFactor = mix(roughnessFactor, 0.55,
              smoothstep(uSnowLine - 380.0, uSnowLine, vTerrainPos.y));
            // Wet mud has a sheen; water takes the sky.
@@ -1177,6 +1210,6 @@ function createTerrainMaterial(
 
   // Any change to the injected source needs a distinct key or three reuses a
   // stale compiled program.
-  material.customProgramCacheKey = () => 'terrain-splat-v13-front';
+  material.customProgramCacheKey = () => 'terrain-splat-v14-relief';
   return material;
 }

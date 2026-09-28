@@ -431,6 +431,7 @@ export class World {
     this.applyStyle();
     this.terrain.regenerate();
     this.shallows.invalidate();
+    this.clouds.groundChanged();
     this.refreshSettlements();
     return preset;
   }
@@ -509,7 +510,7 @@ export class World {
       snowLine: world.style.snowLine * season.snowScale,
       treeLine: world.style.treeLine,
       strata: world.style.strata,
-    }, { beach, timber, farm: world.farmland ?? 0.8, stony: world.style.stony ?? 0 });
+    }, { beach, timber, farm: world.farmland ?? 0.8, stony: world.style.stony ?? 0, bluffs: world.style.bluffs ?? 0 });
     this.vegetation.setSeason(this.seasonIndex);
   }
 
@@ -521,6 +522,7 @@ export class World {
     setTerrainSeed(seed);
     this.terrain.regenerate();
     this.shallows.invalidate();
+    this.clouds.groundChanged();
     this.refreshSettlements();
     return seed;
   }

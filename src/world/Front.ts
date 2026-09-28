@@ -693,6 +693,26 @@ function faceAcross(x: number, side: 1 | -1): number {
 
 type Sampler = (x: number, z: number) => number;
 
+/**
+ * How far the ground off either end of a landing ground rises above a 4°
+ * climb-out from 500 m past its centre, metres (0 when it is clear).
+ */
+function approachExcess(sample: Sampler, cx: number, cz: number, headingDeg: number, elevation: number): number {
+  const hr = (headingDeg * Math.PI) / 180;
+  const dirX = Math.sin(hr);
+  const dirZ = -Math.cos(hr);
+  const climb = Math.tan((4 * Math.PI) / 180);
+  let worst = 0;
+  for (let d = 600; d <= 3000; d += 200) {
+    const allowed = elevation + (d - 500) * climb;
+    for (const s of [1, -1]) {
+      const over = sample(cx + dirX * d * s, cz + dirZ * d * s) - allowed;
+      if (over > worst) worst = over;
+    }
+  }
+  return worst;
+}
+
 /** Height spread over a rotated rectangle, and its mean. */
 function spreadOver(
   sample: Sampler, cx: number, cz: number, headingDeg: number, halfL: number, halfW: number,
@@ -726,6 +746,8 @@ export interface FrontPlanOptions {
   /** Whether a point is sea, river or lake (not craters). */
   wet: (x: number, z: number) => boolean;
   seed: number;
+  /** Landing direction of the home field, degrees (0 = north–south, the default). */
+  homeHeading?: number;
 }
 
 /**
@@ -734,7 +756,7 @@ export interface FrontPlanOptions {
  */
 export function planAerodromes(opts: FrontPlanOptions): void {
   const { natural, seed } = opts;
-  home = makeAerodrome(0, 0, 0, opts.fieldElevation, 1, true, 470, 300, 4, 6);
+  home = makeAerodrome(0, 0, opts.homeHeading ?? 0, opts.fieldElevation, 1, true, 470, 300, 4, 6);
   pads = [];
   padIndex = new Map();
 
@@ -758,7 +780,12 @@ export function planAerodromes(opts: FrontPlanOptions): void {
         }
       }
       if (wet) continue;
-      const score = s.spread + Math.abs(fromHome - 8200) * 0.004;
+      let score = s.spread + Math.abs(fromHome - 8200) * 0.004;
+      if (best !== null && score >= best.score) continue;
+      // A flat field is no use at the foot of a wall: the ground off both
+      // ends has to stay under a shallow climb-out, or in a mountain valley
+      // the runway comes out across it instead of along it.
+      score += approachExcess(natural, p.x, p.z, heading, s.mean) * 0.1;
       if (best === null || score < best.score) {
         best = { x: p.x, z: p.z, heading: heading < 90 ? heading + 180 : heading, mean: s.mean, score };
       }
@@ -882,34 +909,40 @@ export function planFrontSites(opts: SitePlanOptions): void {
     }
 
     // ------------------------------------------------ artillery batteries
-    // Four guns abreast, 22 m apart, 1–3 km behind the fire trench.
+    // Four guns abreast, 22 m apart, 1–3 km behind the fire trench. Where the
+    // ground there will not take a gun line — a mountainside — the battery is
+    // tried closer up, on whatever shelf the line itself crosses (a pass),
+    // and then further back on a valley floor.
     let batteries = 0;
-    for (let i = 0; i < 80 && batteries < 8; i++) {
-      // The same widening as the winches, once the usual band is exhausted.
-      if (i >= 40 && batteries >= 4) break;
-      const x = -REACH_ALONG + ((i * 0.618034) % 1) * 2 * REACH_ALONG + (hash01(i, 3, salt + 21) - 0.5) * 1500;
-      const u = i < 40 ? 1000 + hash01(i, 4, salt + 22) * 2000 : 800 + hash01(i, 4, salt + 22) * 4600;
-      const c = behind(x, u);
-      if (!open(c.x, c.z, 45, 0.12)) continue;
-      if (nearVillage(c.x, c.z, 350) || nearField(c.x, c.z, 250)) continue;
-      if (out.some((t) => t.kind === 'artillery' && Math.hypot(t.x - c.x, t.z - c.z) < 2200)) continue;
+    const tryBattery = (c: { x: number; z: number }): boolean => {
+      if (!open(c.x, c.z, 45, 0.12)) return false;
+      if (nearVillage(c.x, c.z, 350) || nearField(c.x, c.z, 250)) return false;
+      if (out.some((t) => t.kind === 'artillery' && Math.hypot(t.x - c.x, t.z - c.z) < 2200)) return false;
       // The line of guns runs along the front; they all face the enemy.
       const slopeX = frontSlope(c.x);
       const len = Math.hypot(1, slopeX);
       const ax = 1 / len;
       const az = slopeX / len;
-      let ok = true;
       const guns: FrontTarget[] = [];
       for (let g = 0; g < 4; g++) {
         const off = (g - 1.5) * 22;
         const gx = c.x + ax * off;
         const gz = c.z + az * off;
-        if (isWater(gx, gz) || slope(gx, gz, 10) > 0.2) { ok = false; break; }
+        if (isWater(gx, gz) || slope(gx, gz, 10) > 0.2) return false;
         guns.push({ kind: 'artillery', x: gx, z: gz, rotY: faceAcross(c.x, side) });
       }
-      if (!ok) continue;
       out.push(...guns);
       batteries++;
+      return true;
+    };
+    for (let i = 0; i < 40 && batteries < 8; i++) {
+      const x = -REACH_ALONG + ((i * 0.618034) % 1) * 2 * REACH_ALONG + (hash01(i, 3, salt + 21) - 0.5) * 1500;
+      const h = hash01(i, 4, salt + 22);
+      const c = behind(x, 1000 + h * 2000);
+      if (tryBattery(c) || slope(c.x, c.z, 45) < 0.3) continue;
+      // Steep ground in the usual band: closer up, then further back.
+      if (tryBattery(behind(x, 450 + h * 500))) continue;
+      tryBattery(behind(x, 3000 + h * 2200));
     }
 
     // ------------------------------------------------------ anti-aircraft
