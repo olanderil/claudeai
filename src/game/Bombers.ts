@@ -1,14 +1,14 @@
 import * as THREE from 'three';
 import { clamp } from '../util/math';
-import { fieldPoint, ridgeClearance } from '../world/Front';
+import { ridgeClearance } from '../world/Front';
 import { Mode, headingTo, type Objective, type Report } from './Mode';
-import type { Brain, Orders } from '../combat/Brain';
+import type { Brain } from '../combat/Brain';
 import type { Plane } from '../combat/Plane';
 import type { Target } from '../combat/Targets';
-import { FIGHTERS, TYPES } from '../combat/Types';
+import { TYPES } from '../combat/Types';
 
 /**
- * Scramble: the alarm goes with the squadron on the ground.
+ * Bombers: the alarm goes with the squadron on the ground.
  *
  * Enemy bombers and their escort are on the way to the aerodrome. You start
  * on the grass with the engine ticking over: open the throttle, get off the
@@ -30,7 +30,7 @@ const ESCAPED = 6000;
 
 const rand = (a: number, b: number): number => a + Math.random() * (b - a);
 
-export class Scramble extends Mode {
+export class Bombers extends Mode {
   raid = 0;
   bombersDown = 0;
   fightersDown = 0;
@@ -39,7 +39,6 @@ export class Scramble extends Mode {
   private hangars: Target[] = [];
   private bombers: Plane[] = [];
   private escorts: Plane[] = [];
-  private readonly flight: { plane: Plane; wait: number }[] = [];
   /** Bombs each bomber still means to drop on this pass. */
   private readonly stick = new Map<Plane, number>();
   /** Seconds to the next bomb of a stick that has begun falling. */
@@ -49,7 +48,6 @@ export class Scramble extends Mode {
   private bombedThisRaid = false;
   private raidOn = false;
   private nextRaidT = -1;
-  private ordersT = 0;
   /** Seconds the player has been airborne since leaving the ground. */
   private airborneT = 0;
   private wasFlying = false;
@@ -60,7 +58,7 @@ export class Scramble extends Mode {
   private readonly _p = new THREE.Vector3();
 
   get title(): string {
-    return this.raid > 0 ? `RAID ${this.raid}` : 'SCRAMBLE';
+    return this.raid > 0 ? `RAID ${this.raid}` : 'BOMBERS';
   }
 
   start(): void {
@@ -82,39 +80,11 @@ export class Scramble extends Mode {
 
   /* ---------------------------------------------------------------- spawning */
 
-  /** On the grass at the downwind end, facing the take-off run, engine idling. */
+  /** On the runway at the downwind end, facing the take-off run, engine idling. */
   protected override spawnPlayer(first: boolean): Plane {
-    const b = this.battle;
-    if (b.player) b.remove(b.player);
-    const h = this.home;
-    const at = fieldPoint(h, -h.halfLength + 45, 0);
-    const p = b.spawn(this.config.aircraft, this.team, {
-      x: at.x, y: 0, z: at.z, heading: -(h.headingDeg * Math.PI) / 180,
-      parked: true, isPlayer: true, livery: this.config.livery,
-    });
-    p.rpm = 0.2;
     this.airborneT = 0;
     this.wasFlying = false;
-    this.host.playerSpawned(p);
-    if (!first) this.host.notify('A fresh machine on the line', `${this.lives} remaining — get it up`, 3.5);
-    return p;
-  }
-
-  /** The rest of the flight, on the grass beside you, rolling a few seconds apart. */
-  private scrambleFlight(count: number): void {
-    const h = this.home;
-    const heading = -(h.headingDeg * Math.PI) / 180;
-    const slots: [number, number][] = [[-12, 34], [-24, -34], [-36, 68]];
-    const types = FIGHTERS[this.team];
-    for (let i = 0; i < count; i++) {
-      const [along, right] = slots[i % slots.length];
-      const at = fieldPoint(h, -h.halfLength + 45 + along, right);
-      const w = this.battle.spawn(types[i % types.length], this.team, {
-        x: at.x, y: 0, z: at.z, heading, parked: true, livery: 'standard', name: 'Wingman',
-      });
-      w.rpm = 0.2;
-      this.flight.push({ plane: w, wait: 5 + i * 3.5 });
-    }
+    return this.spawnOnRunway(first);
   }
 
   /**
@@ -238,7 +208,7 @@ export class Scramble extends Mode {
 
   protected tick(dt: number): void {
     const p = this.player;
-    this.stepFlight(dt, p);
+    this.stepFlight(dt);
     this.trackAirborne(dt, p);
     if (this.raidOn) this.stepRaid(dt);
     else if (this.nextRaidT > 0) {
@@ -255,43 +225,6 @@ export class Scramble extends Mode {
       this.objectives[2].failed = true;
       this.host.notify('The aerodrome is burning', 'every hangar is down', 4.5);
       this.lose();
-    }
-  }
-
-  /** Wingmen: roll when their turn comes, then cover the field or the player. */
-  private stepFlight(dt: number, p: Plane | null): void {
-    this.ordersT -= dt;
-    const reorder = this.ordersT <= 0;
-    if (reorder) this.ordersT = 1.5;
-    const h = this.home;
-    for (const f of this.flight) {
-      const w = f.plane;
-      if (!w.alive) continue;
-      if (!w.brain) {
-        f.wait -= dt;
-        if (f.wait > 0) continue;
-        // Off the ground and straight out along the field.
-        const out = fieldPoint(h, h.halfLength + 1600, 0);
-        this.battle.setBrain(w, 0.62, {
-          kind: 'route', loop: false, speed: 48, index: 0,
-          points: [new THREE.Vector3(out.x, h.elevation + 450, out.z)],
-        });
-        w.throttle = 1;
-        continue;
-      }
-      if (!reorder || w.state !== 'flying') continue;
-      const brain = w.brain as Brain;
-      const agl = w.position.y - this.battle.ground(w.position.x, w.position.z);
-      if (brain.orders.kind === 'route' && agl < 250) continue;
-      // With the player up, fly on his wing; with him on the ground, over the field.
-      const playerUp = p !== null && p.alive && p.state === 'flying'
-        && p.position.y - this.battle.ground(p.position.x, p.position.z) > 120;
-      const want: Orders['kind'] = playerUp ? 'escort' : 'patrol';
-      if (brain.orders.kind === want) continue;
-      const i = this.flight.indexOf(f);
-      brain.orders = playerUp && p
-        ? { kind: 'escort', leader: p, slot: new THREE.Vector3(i % 2 ? -40 : 40, 6 + i * 4, 30 + i * 20), range: 1600 }
-        : { kind: 'patrol', centre: new THREE.Vector3(h.x, h.elevation + 700, h.z), radius: 900, engage: 3000 };
     }
   }
 
@@ -445,7 +378,7 @@ export class Scramble extends Mode {
         ? 'Pilot went up against the raiders but could not get at the bombers.'
         : `Pilot met ${this.raid} ${this.raid === 1 ? 'raid' : 'raids'} over the aerodrome and brought down ${this.bombersDown} ${this.bombersDown === 1 ? 'bomber' : 'bombers'}. The field is still ours.`;
     return {
-      title: 'Scramble',
+      title: 'Bombers',
       subtitle: 'Defence of the aerodrome',
       outcome: this.burning ? 'defeat' : 'ended',
       rows: [

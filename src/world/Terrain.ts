@@ -913,6 +913,21 @@ function createTerrainMaterial(
              float apron = (1.0 - smoothstep(20.0, 45.0, abs(ri + W + 20.0)))
                          * (1.0 - smoothstep(130.0, 190.0, abs(al + L * 0.55 - 60.0)));
              col = mix(col, uDry * (0.78 + 0.2 * fine), apron * 0.75);
+             // The take-off strip: rolled flat down the middle of the field and
+             // worn to bare earth by the wheels, chalked along its edges, with a
+             // threshold bar at each end — where a scramble lines up.
+             float runHalf = 22.0;
+             float runEnd = L - 40.0;
+             float onRun = (1.0 - smoothstep(runHalf - 2.5, runHalf + 1.5, abs(ri)))
+                         * (1.0 - smoothstep(runEnd - 4.0, runEnd + 2.0, abs(al)));
+             vec3 earth = mix(uDry * 0.8, uDry * 0.6 + vec3(0.02, 0.016, 0.01), 0.3 + 0.35 * fine);
+             float ruts = bfLine(abs(abs(ri) - 5.5), 2.2, fw) + bfLine(abs(ri), 1.4, fw) * 0.6;
+             earth = mix(earth, earth * 0.78, clamp(ruts, 0.0, 1.0) * 0.55);
+             col = mix(col, earth, onRun * 0.9 * inField);
+             float dash = step(0.45, fract(al / 14.0));
+             float chalk = bfLine(abs(abs(ri) - runHalf), 0.55, fw) * step(abs(al), runEnd) * dash;
+             float thresh = bfLine(abs(abs(al) - (runEnd - 12.0)), 1.6, fw) * step(abs(ri), runHalf - 3.0);
+             col = mix(col, vec3(0.80, 0.79, 0.74), max(chalk * 0.85, thresh) * inField);
              // The marks: a circle in the middle and a landing T at the downwind end.
              float ring = bfLine(abs(length(vec2(al, ri)) - 20.0), 1.2, fw);
              float tX = al + L * 0.6;

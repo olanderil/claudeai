@@ -29,8 +29,10 @@ Add `?quality=low|medium|high|ultra` to the URL to pick the graphics preset up f
 **Modes**
 - **Quick Battle** — offensive patrol against endless, escalating waves of enemy scouts,
   with an ace leading from the third wave. Kite balloons over the enemy lines for the taking.
-  Three machines; land at your aerodrome and stop to refit.
-- **Scramble** — the alarm bell goes with you on the grass. Bombers and their escort are
+  Three machines; land at your aerodrome and stop to refit. Set **Start: On the field**
+  on the main menu to begin on the home runway instead, with a wingman lined up behind
+  you and a minute before the first wave arrives.
+- **Bombers** — the alarm bell goes with you on the runway. Bombers and their escort are
   on the way to your aerodrome, with their time of arrival counting down: open the
   throttle, get off the ground, climb to meet them while your wingmen roll after you and
   the field's guns open up, and keep the hangars standing. The raiders come in over the

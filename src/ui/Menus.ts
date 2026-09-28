@@ -12,7 +12,7 @@ import type { Report } from '../game/Mode';
 
 export interface MenuActions {
   quickBattle(): void;
-  scramble(): void;
+  bombers(): void;
   watch(): void;
   fly(mission: MissionInfo): void;
   resume(): void;
@@ -50,6 +50,8 @@ export class Menus {
   team: Team = 'allied';
   aircraft: AirframeId = 'camel';
   level: Level = levelById(null);
+  /** Quick Battle from the home runway rather than in the air. */
+  onField = false;
   /** Redraws the main-menu pickers. */
   private renderPickers: () => void = () => {};
   private readonly root = document.getElementById('screens') as HTMLDivElement;
@@ -59,16 +61,17 @@ export class Menus {
 
   constructor(private readonly actions: MenuActions) {
     this.done = new Set(this.load<string[]>(STORE, []));
-    const pick = this.load<{ team?: Team; aircraft?: AirframeId; level?: string }>(PICK, {});
+    const pick = this.load<{ team?: Team; aircraft?: AirframeId; level?: string; onField?: boolean }>(PICK, {});
     if (pick.team === 'allied' || pick.team === 'central') this.team = pick.team;
     if (pick.aircraft && FIGHTERS[this.team].includes(pick.aircraft)) this.aircraft = pick.aircraft;
     else this.aircraft = FIGHTERS[this.team][0];
     this.level = levelById(pick.level);
+    this.onField = pick.onField === true;
     this.buildPickers();
   }
 
   private savePick(): void {
-    this.save(PICK, { team: this.team, aircraft: this.aircraft, level: this.level.id });
+    this.save(PICK, { team: this.team, aircraft: this.aircraft, level: this.level.id, onField: this.onField });
   }
 
   /** Set the level from elsewhere (the Controls tab). */
@@ -112,6 +115,7 @@ export class Menus {
     const note = document.getElementById('pick-note');
     const level = document.getElementById('pick-level');
     const levelNote = document.getElementById('pick-level-note');
+    const start = document.getElementById('pick-start');
     if (!side || !plane || !note) return;
     const render = (): void => {
       side.textContent = '';
@@ -174,12 +178,33 @@ export class Menus {
         }
       }
       if (levelNote) levelNote.textContent = this.level.note;
+      if (start) {
+        start.textContent = '';
+        start.append(el('span', 'c-seg-label', 'Start'));
+        for (const [label, field] of [['In the air', false], ['On the field', true]] as const) {
+          const b = el('button', undefined, label);
+          b.type = 'button';
+          b.setAttribute('role', 'radio');
+          b.setAttribute('aria-checked', String(field === this.onField));
+          b.title = field ? 'Quick Battle begins on the home runway, engine idling' : 'Quick Battle begins in the air near the lines';
+          b.addEventListener('click', (e) => {
+            e.stopPropagation();
+            b.blur();
+            if (field === this.onField) return;
+            this.onField = field;
+            this.savePick();
+            this.actions.select();
+            render();
+          });
+          start.append(b);
+        }
+      }
     };
     this.renderPickers = render;
     render();
     for (const [id, fn] of [
       ['choose-battle', () => this.actions.quickBattle()],
-      ['choose-scramble', () => this.actions.scramble()],
+      ['choose-bombers', () => this.actions.bombers()],
       ['choose-watch', () => this.actions.watch()],
       ['choose-campaign', () => this.showCampaign()],
     ] as const) {
@@ -223,7 +248,9 @@ export class Menus {
     }
     this.current = id;
     document.body.classList.add('screen-open');
-    const first = this.screens.get(id)?.querySelector<HTMLElement>('.btn.primary, .mission, .btn');
+    const screen = this.screens.get(id);
+    const first = screen?.querySelector<HTMLElement>('[data-default]')
+      ?? screen?.querySelector<HTMLElement>('.btn.primary, .mission, .btn');
     first?.focus({ preventScroll: true });
   }
 
@@ -302,11 +329,15 @@ export class Menus {
       h.innerHTML = 'Holding <span class="accent">pattern</span>';
       card.append(h);
       const actions = el('div', 'actions');
+      // The way out is the accented one — it is what the menu icon is for —
+      // but the keyboard lands on Resume, so Enter never throws a sortie away.
+      const resume = this.button('Resume', () => this.actions.resume());
+      resume.dataset.default = '';
       actions.append(
-        this.button('Resume', () => this.actions.resume(), 'btn primary'),
+        resume,
         this.button(inMission ? 'Restart mission' : 'Restart', () => this.actions.restart()),
         this.button('Controls', () => this.actions.help()),
-        this.button('Main menu', () => this.actions.quit(), 'btn quiet'),
+        this.button('Main menu', () => this.actions.quit(), 'btn primary'),
       );
       card.append(actions);
     });

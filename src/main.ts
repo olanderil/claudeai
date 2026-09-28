@@ -1061,7 +1061,12 @@ function boot(): void {
     cue: (k) => sfx.ui(k),
     // The rig decides where a kill cam may play (cinematic and director, not
     // the views the player flies by).
-    killCam: (s) => rig.requestKillCam({ position: s.position, velocity: s.velocity }, 3.2),
+    // Followed by its drawn pose where there is one (see the combat context).
+    killCam: (s) => {
+      const plane = game.battle.planes.find((q) => q.position === s.position);
+      const visual = plane ? game.battle.visualOf(plane) : undefined;
+      rig.requestKillCam(visual ?? { position: s.position, velocity: s.velocity }, 3.2);
+    },
     subjectChanged: (v) => {
       if (subject && subject !== v) subject.setCockpitVisible(false);
       subject = v;
@@ -1193,7 +1198,7 @@ function boot(): void {
     world.prime(new THREE.Vector3(0, 0, 0));
     if (game.state === 'attract') game.startAttract();
     else if (game.mission) startMission(game.mission, false);
-    else if (game.kind === 'scramble') startScramble(false);
+    else if (game.kind === 'bombers') startBombers(false);
     else if (game.mode) startQuickBattle(false);
     world.prime(game.player?.position ?? new THREE.Vector3(0, 0, -2000));
     notify(`FRONT  ${preset.name}`, `SEED ${String(seed).padStart(6, '0')}`);
@@ -1225,18 +1230,18 @@ function boot(): void {
     // World and Style tabs — the menu's dogfight is a preview of exactly that.
     if (fresh) world.prime(new THREE.Vector3(0, 0, 0));
     game.setAutopilot(false);
-    game.startQuickBattle(menus.team, menus.aircraft);
+    game.startQuickBattle(menus.team, menus.aircraft, undefined, menus.onField);
     if (rig.mode === 'cinematic' || rig.mode === 'director') rig.setMode('chase');
     cameraMode = rig.mode.toUpperCase();
     world.prime(game.player?.position ?? new THREE.Vector3());
     enterFlight();
   }
 
-  /** Scramble: over the front, hour and weather that are set, from the grass. */
-  function startScramble(fresh = true): void {
+  /** Bombers: over the front, hour and weather that are set, from the runway. */
+  function startBombers(fresh = true): void {
     if (fresh) world.prime(new THREE.Vector3(0, 0, 0));
     game.setAutopilot(false);
-    game.startScramble(menus.team, menus.aircraft);
+    game.startBombers(menus.team, menus.aircraft);
     if (rig.mode === 'cinematic' || rig.mode === 'director') rig.setMode('chase');
     cameraMode = rig.mode.toUpperCase();
     world.prime(game.player?.position ?? new THREE.Vector3());
@@ -1262,6 +1267,11 @@ function boot(): void {
 
   /** Watch from the main menu: a quick battle flown by the autopilot. */
   function startWatch(): void {
+    // Watching is for the picture, so it takes the whole screen. Called from
+    // the menu's click, which is the gesture the browser needs for this.
+    if (document.fullscreenElement === null) {
+      document.documentElement.requestFullscreen?.()?.catch(() => undefined);
+    }
     world.prime(new THREE.Vector3(0, 0, 0));
     game.startQuickBattle(menus.team, menus.aircraft);
     game.setAutopilot(true);
@@ -1310,7 +1320,7 @@ function boot(): void {
 
   function restart(): void {
     if (game.mission) startMission(game.mission, false);
-    else if (game.kind === 'scramble') startScramble(false);
+    else if (game.kind === 'bombers') startBombers(false);
     else startQuickBattle(false);
   }
 
@@ -1335,7 +1345,7 @@ function boot(): void {
 
   const menus = new Menus({
     quickBattle: () => startQuickBattle(),
-    scramble: () => startScramble(),
+    bombers: () => startBombers(),
     watch: () => startWatch(),
     fly: (m) => startMission(m),
     resume: () => pause(false),
@@ -1599,11 +1609,16 @@ function boot(): void {
     const filmed = game.subjectPlane;
     const target = game.storyTarget;
     const threat = game.threat(filmed);
+    // Where the other machines are *drawn* — the interpolated render pose —
+    // not where the physics has them: the two differ by a fraction of a step
+    // that changes every frame, and a camera framed on the one while the eye
+    // sees the other trembles back and forth along the flight path.
+    const targetVisual = target ? battle.visualOf(target) : undefined;
     rig.setCombatContext({
       target: target && target.alive
-        ? { position: target.position, velocity: target.velocity, cameraScale: battle.visualOf(target)?.cameraScale }
+        ? { position: targetVisual?.root.position ?? target.position, velocity: target.velocity, cameraScale: targetVisual?.cameraScale }
         : null,
-      threat: threat ? { position: threat.position } : null,
+      threat: threat ? { position: battle.visualOf(threat)?.root.position ?? threat.position } : null,
     });
     const firing = Boolean(filmed?.alive && filmed.input.fire && filmed.gun.jam <= 0 && filmed.gun.ammo > 0);
     rig.setGunfire(Boolean(subjectPlane && firing));
@@ -2034,7 +2049,7 @@ function boot(): void {
       sim: {
         game, battle: game.battle, rig, world, engine, input, loop, hud, tips, panel, menus, sfx,
         terrainHeight, groundHeight, settlements, structures, toggleTour,
-        startQuickBattle, startScramble, startMission, startWatch, quitToMenu, pause,
+        startQuickBattle, startBombers, startMission, startWatch, quitToMenu, pause,
         get paused() { return paused; },
         missions: MISSIONS,
         /** Run the game for `seconds` of game time without drawing. */

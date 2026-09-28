@@ -11,7 +11,7 @@ import { DEFAULT_LEVEL, type Level } from '../combat/Levels';
 import type { Sfx } from '../audio/Sfx';
 import { Mode, type ModeHost, type Report } from './Mode';
 import { QuickBattle } from './QuickBattle';
-import { Scramble } from './Scramble';
+import { Bombers } from './Bombers';
 import { MISSIONS, type MissionInfo } from './Campaign';
 
 /**
@@ -152,20 +152,20 @@ export class Game {
 
   /* ------------------------------------------------------------- modes */
 
-  startQuickBattle(team: Team, aircraft: AirframeId, livery?: string): void {
-    this.begin(new QuickBattle(this.battle, this.host, { team, aircraft, livery }), null);
+  startQuickBattle(team: Team, aircraft: AirframeId, livery?: string, onField = false): void {
+    this.begin(new QuickBattle(this.battle, this.host, { team, aircraft, livery, onField }), null);
   }
 
-  /** Scramble: on the grass, with a raid on the way. */
-  startScramble(team: Team, aircraft: AirframeId, livery?: string): void {
-    this.begin(new Scramble(this.battle, this.host, { team, aircraft, livery }), null);
+  /** Bombers: on the runway, with a raid on the way to the aerodrome. */
+  startBombers(team: Team, aircraft: AirframeId, livery?: string): void {
+    this.begin(new Bombers(this.battle, this.host, { team, aircraft, livery }), null);
   }
 
   /** Which kind of sortie is running, for restarting the same one. */
-  get kind(): 'quick' | 'scramble' | 'mission' | null {
+  get kind(): 'quick' | 'bombers' | 'mission' | null {
     if (!this.mode) return null;
     if (this.mission) return 'mission';
-    return this.mode instanceof Scramble ? 'scramble' : 'quick';
+    return this.mode instanceof Bombers ? 'bombers' : 'quick';
   }
 
   startMission(info: MissionInfo, team: Team, aircraft: AirframeId, livery?: string): void {

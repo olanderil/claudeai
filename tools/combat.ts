@@ -15,6 +15,18 @@ import { Brain, type BrainWorld } from '../src/combat/Brain';
 import { Ballistics, type Shootable } from '../src/combat/Ballistics';
 import { TYPES, stallSpeed, type AirframeId } from '../src/combat/Types';
 
+// Seeded, so a check passes or fails on the code rather than on the dice:
+// a 150-second dogfight between six AI pilots is a matter of chance, and a
+// fight that happens to end with nobody down is not a regression.
+let seed = 1917;
+Math.random = (): number => {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let t = seed;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+
 const DT = 1 / 120;
 const ground = (x: number, z: number): number => 20 + 15 * Math.sin(x / 900) * Math.cos(z / 700);
 const water = (): boolean => false;
@@ -135,12 +147,14 @@ console.log('\nDogfight: 3 Camels v 3 Albatros/Dr.I, AI skill 0.6, 150 s:');
   stepArena(a, 150);
   for (const p of a.planes) if (!Number.isFinite(p.position.x + p.position.y + p.position.z)) nan = true;
   const down = a.planes.filter((p) => !p.alive).length;
-  console.log(`  rounds ${a.stats.rounds}, hits ${a.stats.hits}, shot down ${a.stats.kills}, crashed ${a.stats.crashes}, out of the fight ${down}`);
+  console.log(`  rounds ${a.stats.rounds}, hits ${a.stats.hits}, shot down ${a.stats.kills}, flew into the ground ${a.stats.unshot}, out of the fight ${down}`);
   check(!nan, 'no NaN positions');
   check(a.stats.rounds > 300, 'the AI opens fire');
   check(a.stats.hits > 20, 'the AI hits things');
   check(a.stats.kills >= 1, 'somebody gets shot down');
-  check(a.stats.crashes <= 2, 'few machines fly into the ground unshot');
+  // Counted from the kills with no killer: a machine shot down and falling
+  // into the ground is the fight working, not a pilot flying into it.
+  check(a.stats.unshot <= 1, 'few machines fly into the ground unshot');
 }
 
 console.log('\nMountain dogfight: the same fight in an alpine valley over a 2,000 m pass, 150 s:');

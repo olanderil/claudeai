@@ -6,8 +6,13 @@ import type { Target } from '../combat/Targets';
  * Offensive patrol, endlessly: formations of enemy scouts come over the lines
  * in waves, each larger and sharper than the last, with an ace leading from
  * the third. Balloons over the enemy lines are there for the taking. Three
- * machines; land at the aerodrome to refit.
+ * machines; land at the aerodrome to refit. Started from the field, you and
+ * your wingman take off from the home runway, with a minute before the first
+ * of them arrive.
  */
+/** Seconds on the runway before the first wave, when starting from the field. */
+const FIELD_GRACE = 50;
+
 export class QuickBattle extends Mode {
   wave = 0;
   kills = 0;
@@ -17,22 +22,35 @@ export class QuickBattle extends Mode {
   best = 0;
 
   get title(): string {
-    return `WAVE ${this.wave}`;
+    return this.wave === 0 ? 'TAKE-OFF' : `WAVE ${this.wave}`;
   }
 
   start(): void {
     this.spawnPlayer(true);
-    this.wingmen(1, 0.58);
+    if (this.config.onField) this.scrambleFlight(1, 0.58);
+    else this.wingmen(1, 0.58);
     this.balloons_ = this.balloons(-1, 3);
     this.balloons(1, 2, false);
     this.groundTargets(-1, ['aagun'], 3);
     this.dressAerodrome(this.home, 3);
     this.dressAerodrome(this.far, 4);
-    this.nextWave();
     this.objectives = [
       { text: 'Destroy enemy scouts', done: false },
       { text: 'Burn the kite balloons', done: false, optional: true },
     ];
+    if (this.config.onField) {
+      // Time to get off the ground and up before the first of them arrive.
+      this.clearing = true;
+      this.clearT = FIELD_GRACE;
+      this.host.notify('On the line', `enemy scouts expected in about ${FIELD_GRACE} s — open the throttle (Shift or 0)`, 5);
+    } else {
+      this.nextWave();
+    }
+  }
+
+  /** In the air over the home field, or waiting on its runway. */
+  protected override spawnPlayer(first: boolean): Plane {
+    return this.config.onField ? this.spawnOnRunway(first) : super.spawnPlayer(first);
   }
 
   private nextWave(): void {
@@ -45,7 +63,8 @@ export class QuickBattle extends Mode {
     const flight = this.enemyFlight(count, at, p?.position ?? at, skill, { ace: n >= this.battle.level.aceWave });
     if (n > 1) for (const b of this.balloons_) if (!b.alive) this.respawnBalloon(b);
     const have = this.battle.planes.filter((q) => q.team === this.team && !q.isPlayer && q.alive && q.role !== 'parked').length;
-    if (p?.alive && have < (n >= 4 ? 2 : 1)) this.wingmen(1, 0.55 + n * 0.04);
+    // Reinforcements join in the air, so only while there is someone up to join.
+    if (p?.alive && p.state === 'flying' && have < (n >= 4 ? 2 : 1)) this.wingmen(1, 0.55 + n * 0.04);
     const brg = p ? Math.round(((Math.atan2(at.x - p.position.x, -(at.z - p.position.z)) * 180) / Math.PI + 360) % 360) : 0;
     this.host.notify(`Wave ${n}`, `${flight.length} scouts inbound · bearing ${String(brg).padStart(3, '0')}°`, 4.5);
   }
@@ -66,6 +85,7 @@ export class QuickBattle extends Mode {
   }
 
   protected tick(dt: number): void {
+    this.stepFlight(dt);
     const enemies = this.battle.planes.some((q) => q.team === this.enemy && q.alive && q.role !== 'parked');
     if (!enemies && !this.clearing) {
       this.clearing = true;

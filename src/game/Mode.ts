@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { clamp } from '../util/math';
-import { aerodromes, balloonAnchors, farAerodrome, frontTargets, frontZ, homeAerodrome, ridgeClearance, type Aerodrome } from '../world/Front';
+import { aerodromes, balloonAnchors, farAerodrome, fieldPoint, frontTargets, frontZ, homeAerodrome, ridgeClearance, type Aerodrome } from '../world/Front';
 import type { Battle, SpawnOptions } from '../combat/Battle';
-import type { Orders } from '../combat/Brain';
+import type { Brain, Orders } from '../combat/Brain';
 import type { Plane } from '../combat/Plane';
 import { makeBalloon, makeGroundTarget, type Target } from '../combat/Targets';
 import { FIGHTERS, TYPES, other, type AirframeId, type Team } from '../combat/Types';
@@ -47,7 +47,15 @@ export interface ModeConfig {
   team: Team;
   aircraft: AirframeId;
   livery?: string;
+  /** Start on the runway of the home aerodrome rather than in the air. */
+  onField?: boolean;
 }
+
+/**
+ * Where on the take-off strip the first machine waits: metres in from the
+ * downwind edge of the field, just past the threshold bar.
+ */
+const RUNWAY_IN = 70;
 
 export const headingTo = (fx: number, fz: number, tx: number, tz: number): number =>
   Math.atan2(-(tx - fx), -(tz - fz));
@@ -66,6 +74,9 @@ export abstract class Mode {
   protected respawnT = 0;
   private repairMsgT = 0;
   private boundsMsgT = 0;
+  /** Wingmen waiting on the strip, and the seconds until each one rolls. */
+  protected readonly flight: { plane: Plane; wait: number; skill: number }[] = [];
+  private flightOrdersT = 0;
   /** Seconds after the end before the report shows, so the last kill plays out. */
   endT = 0;
   readonly team: Team;
@@ -224,6 +235,90 @@ export abstract class Mode {
     this.host.playerSpawned(p);
     if (!first) this.host.notify('A fresh machine', `${this.lives} remaining`, 3);
     return p;
+  }
+
+  /* ------------------------------------------------------ from the runway */
+
+  /** The heading down the home field's take-off run, in the spawn convention. */
+  protected runwayHeading(): number {
+    return -(this.home.headingDeg * Math.PI) / 180;
+  }
+
+  /**
+   * On the take-off strip at the downwind end of the home field, facing the
+   * run, engine ticking over: open the throttle and go.
+   */
+  protected spawnOnRunway(first: boolean): Plane {
+    const b = this.battle;
+    if (b.player) b.remove(b.player);
+    const h = this.home;
+    const at = fieldPoint(h, RUNWAY_IN - h.halfLength, 0);
+    const p = b.spawn(this.config.aircraft, this.team, {
+      x: at.x, y: 0, z: at.z, heading: this.runwayHeading(),
+      parked: true, isPlayer: true, livery: this.config.livery,
+    });
+    p.rpm = 0.2;
+    this.host.playerSpawned(p);
+    if (!first) this.host.notify('A fresh machine on the line', `${this.lives} remaining — get it up`, 3.5);
+    return p;
+  }
+
+  /**
+   * The rest of the flight, staggered down the strip behind you and to
+   * either side of the centre line, rolling a few seconds apart.
+   */
+  protected scrambleFlight(count: number, skill = 0.62): void {
+    const h = this.home;
+    const slots: [number, number][] = [[-28, 13], [-56, -13], [-84, 13], [-112, -13]];
+    const types = FIGHTERS[this.team];
+    for (let i = 0; i < count; i++) {
+      const [along, right] = slots[i % slots.length];
+      const at = fieldPoint(h, RUNWAY_IN - h.halfLength + along, right);
+      const w = this.battle.spawn(types[i % types.length], this.team, {
+        x: at.x, y: 0, z: at.z, heading: this.runwayHeading(), parked: true, livery: 'standard', name: 'Wingman',
+      });
+      w.rpm = 0.2;
+      w.throttle = 0;
+      this.flight.push({ plane: w, wait: 5 + i * 3.5, skill });
+    }
+  }
+
+  /** The flight on the strip: roll when their turn comes, then cover the field or the player. */
+  protected stepFlight(dt: number): void {
+    this.flightOrdersT -= dt;
+    const reorder = this.flightOrdersT <= 0;
+    if (reorder) this.flightOrdersT = 1.5;
+    const h = this.home;
+    const p = this.player;
+    for (const f of this.flight) {
+      const w = f.plane;
+      if (!w.alive) continue;
+      if (!w.brain) {
+        f.wait -= dt;
+        if (f.wait > 0) continue;
+        // Off the ground and straight out along the field.
+        const out = fieldPoint(h, h.halfLength + 1600, 0);
+        this.battle.setBrain(w, f.skill, {
+          kind: 'route', loop: false, speed: 48, index: 0,
+          points: [new THREE.Vector3(out.x, h.elevation + 450, out.z)],
+        });
+        w.throttle = 1;
+        continue;
+      }
+      if (!reorder || w.state !== 'flying') continue;
+      const brain = w.brain as Brain;
+      const agl = w.position.y - this.battle.ground(w.position.x, w.position.z);
+      if (brain.orders.kind === 'route' && agl < 250) continue;
+      // With the player up, fly on his wing; with him on the ground, over the field.
+      const playerUp = p !== null && p.alive && p.state === 'flying'
+        && p.position.y - this.battle.ground(p.position.x, p.position.z) > 120;
+      const want: Orders['kind'] = playerUp ? 'escort' : 'patrol';
+      if (brain.orders.kind === want) continue;
+      const i = this.flight.indexOf(f);
+      brain.orders = playerUp && p
+        ? { kind: 'escort', leader: p, slot: new THREE.Vector3(i % 2 ? -40 : 40, 6 + i * 4, 30 + i * 20), range: 1600 }
+        : { kind: 'patrol', centre: new THREE.Vector3(h.x, h.elevation + 700, h.z), radius: 900, engage: 3000 };
+    }
   }
 
   protected wingmen(count: number, skill = 0.6): Plane[] {

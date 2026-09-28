@@ -147,7 +147,7 @@ export class CombatHUD {
       return;
     }
     p.axes();
-    _v.copy(p.position).addScaledVector(p.fwd, p.type.converge);
+    _v.copy(drawn(f, p)).addScaledVector(p.fwd, p.type.converge);
     const sp = this.project(_v, f.camera, this.p1);
     this.sx = sp.behind ? this.width / 2 : clamp(sp.x, this.width * 0.2, this.width * 0.8);
     this.sy = sp.behind ? this.height / 2 : clamp(sp.y, this.height * 0.2, this.height * 0.8);
@@ -220,7 +220,7 @@ export class CombatHUD {
   private drawSight(f: HudFrame, p: Plane): void {
     const ctx = this.ctx;
     const s = this.scale;
-    _v.copy(p.position).addScaledVector(p.fwd, p.type.converge);
+    _v.copy(drawn(f, p)).addScaledVector(p.fwd, p.type.converge);
     const sp = this.project(_v, f.camera, this.p1);
     if (sp.behind) return;
     const x = sp.x;
@@ -271,7 +271,7 @@ export class CombatHUD {
       const d = t.position.distanceTo(p.position);
       if (d < 900) {
         const tof = d / BULLET_SPEED;
-        _v.copy(t.position).addScaledVector(_rel.subVectors(t.velocity, p.velocity), tof);
+        _v.copy(drawn(f, t)).addScaledVector(_rel.subVectors(t.velocity, p.velocity), tof);
         _v.y += 0.5 * BULLET_GRAVITY * tof * tof;
         const lp = this.project(_v, f.camera, this.p2);
         if (lp.on) {
@@ -481,7 +481,7 @@ export class CombatHUD {
       const parked = o.role === 'parked';
       if (parked && d > 1500) continue;
       const isT = o === f.target;
-      const pr = this.project(o.position, cam, this.p2);
+      const pr = this.project(drawn(f, o), cam, this.p2);
       if (enemy) next.add(o);
       if (pr.on) {
         const r = Math.max(8 * s, ((o.radius * 1.1) / d) * focal);
@@ -535,7 +535,7 @@ export class CombatHUD {
         this.kills.splice(i, 1);
         continue;
       }
-      const pr = this.project(k.p.position, cam, this.p2);
+      const pr = this.project(drawn(f, k.p), cam, this.p2);
       if (!pr.on) continue;
       ctx.save();
       ctx.globalAlpha = 1 - u * u;
@@ -598,7 +598,7 @@ export class CombatHUD {
       }
     }
     if (!best) return;
-    const pr = this.project(best.position, f.camera, this.p2);
+    const pr = this.project(drawn(f, best), f.camera, this.p2);
     const ang = this.screenAngle(pr);
     const R = this.ringRadius();
     const firing = (f.battle.visualOf(best)?.firingT ?? 0) > 0;
@@ -899,6 +899,15 @@ export class CombatHUD {
     ctx.lineTo(x, y + 6 * s);
     this.stroke(INK, 1.3);
   }
+}
+
+/**
+ * Where a machine is drawn this frame — the interpolated render pose — which
+ * is what a marker has to sit on. The physics position is up to a step ahead
+ * of it and a different amount every frame, so marks placed there jitter.
+ */
+function drawn(f: HudFrame, p: Plane): THREE.Vector3 {
+  return f.battle.visualOf(p)?.root.position ?? p.position;
 }
 
 function isEnemyTarget(t: Target | null, p: Plane): boolean {
