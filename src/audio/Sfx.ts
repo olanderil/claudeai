@@ -49,7 +49,7 @@ const MAX_UI = 6;
 
 const GUN_KINDS = new Set<string>(['vickers', 'spandau', 'lewis']);
 const UI_LEVEL: Record<string, number | undefined> = {
-  select: 0.13, confirm: 0.15, back: 0.13, objective: 0.17, fail: 0.15, victory: 0.16,
+  select: 0.13, confirm: 0.15, back: 0.13, objective: 0.17, fail: 0.15, victory: 0.16, alarm: 0.2,
 };
 
 /** One-shot categories, each with its own voice limit. */

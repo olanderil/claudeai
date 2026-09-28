@@ -1193,6 +1193,7 @@ function boot(): void {
     world.prime(new THREE.Vector3(0, 0, 0));
     if (game.state === 'attract') game.startAttract();
     else if (game.mission) startMission(game.mission, false);
+    else if (game.kind === 'scramble') startScramble(false);
     else if (game.mode) startQuickBattle(false);
     world.prime(game.player?.position ?? new THREE.Vector3(0, 0, -2000));
     notify(`FRONT  ${preset.name}`, `SEED ${String(seed).padStart(6, '0')}`);
@@ -1225,6 +1226,17 @@ function boot(): void {
     if (fresh) world.prime(new THREE.Vector3(0, 0, 0));
     game.setAutopilot(false);
     game.startQuickBattle(menus.team, menus.aircraft);
+    if (rig.mode === 'cinematic' || rig.mode === 'director') rig.setMode('chase');
+    cameraMode = rig.mode.toUpperCase();
+    world.prime(game.player?.position ?? new THREE.Vector3());
+    enterFlight();
+  }
+
+  /** Scramble: over the front, hour and weather that are set, from the grass. */
+  function startScramble(fresh = true): void {
+    if (fresh) world.prime(new THREE.Vector3(0, 0, 0));
+    game.setAutopilot(false);
+    game.startScramble(menus.team, menus.aircraft);
     if (rig.mode === 'cinematic' || rig.mode === 'director') rig.setMode('chase');
     cameraMode = rig.mode.toUpperCase();
     world.prime(game.player?.position ?? new THREE.Vector3());
@@ -1298,6 +1310,7 @@ function boot(): void {
 
   function restart(): void {
     if (game.mission) startMission(game.mission, false);
+    else if (game.kind === 'scramble') startScramble(false);
     else startQuickBattle(false);
   }
 
@@ -1322,6 +1335,7 @@ function boot(): void {
 
   const menus = new Menus({
     quickBattle: () => startQuickBattle(),
+    scramble: () => startScramble(),
     watch: () => startWatch(),
     fly: (m) => startMission(m),
     resume: () => pause(false),
@@ -2020,7 +2034,7 @@ function boot(): void {
       sim: {
         game, battle: game.battle, rig, world, engine, input, loop, hud, tips, panel, menus, sfx,
         terrainHeight, groundHeight, settlements, structures, toggleTour,
-        startQuickBattle, startMission, startWatch, quitToMenu, pause,
+        startQuickBattle, startScramble, startMission, startWatch, quitToMenu, pause,
         get paused() { return paused; },
         missions: MISSIONS,
         /** Run the game for `seconds` of game time without drawing. */

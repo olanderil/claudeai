@@ -572,7 +572,7 @@ function bombRelease(sr: number, r: Rng): Float32Array {
 // Interface
 // ---------------------------------------------------------------------------
 
-export type UiKind = 'select' | 'confirm' | 'back' | 'objective' | 'fail' | 'victory';
+export type UiKind = 'select' | 'confirm' | 'back' | 'objective' | 'fail' | 'victory' | 'alarm';
 
 function woodClick(o: Float32Array, sr: number, t: number, base: number, amp: number, r: Rng): void {
   addNoiseBurst(o, sr, t, amp * 0.3, 0.0003, r);
@@ -628,6 +628,16 @@ function ui(kind: UiKind, sr: number, r: Rng): Float32Array {
       bell(o, sr, 0.16, 659.25, 0.8, 1.2, r);
       bell(o, sr, 0.32, 784, 0.85, 1.3, r);
       bell(o, sr, 0.56, 1046.5, 1, 1.9, r);
+      break;
+    case 'alarm':
+      // The aerodrome alarm: a hand bell swung hard by someone running, a
+      // couple of dozen strikes, never quite even.
+      o = zeros(3.4, sr);
+      for (let i = 0; i < 20; i++) {
+        const t = 0.002 + i * 0.14 + (r() - 0.5) * 0.025;
+        bell(o, sr, t, 1320 * (1 + 0.004 * gauss(r)), 0.7 + 0.3 * r(), 0.32, r);
+      }
+      o = filtered(o, new Biquad('lowpass', sr, 5200, 0.7));
       break;
   }
   fadeIn(o, 2);
@@ -685,7 +695,7 @@ export type ClipName =
   | 'hit' | 'hit.thud' | 'hit.confirm' | 'whiz'
   | 'exp.crack' | 'exp.boom' | 'exp.tail' | 'exp.debris'
   | 'flak' | 'balloon' | 'artillery' | 'jam' | 'clear' | 'bomb'
-  | 'ui.select' | 'ui.confirm' | 'ui.back' | 'ui.objective' | 'ui.fail' | 'ui.victory'
+  | 'ui.select' | 'ui.confirm' | 'ui.back' | 'ui.objective' | 'ui.fail' | 'ui.victory' | 'ui.alarm'
   | 'noise.white' | 'noise.pink' | 'noise.brown' | 'ir';
 
 /**
@@ -736,6 +746,7 @@ export const BANK: Record<ClipName, BankEntry> = {
   'ui.objective': seeded(1, 74, (s, r) => ui('objective', s, r)),
   'ui.fail': seeded(1, 75, (s, r) => ui('fail', s, r)),
   'ui.victory': seeded(1, 76, (s, r) => ui('victory', s, r)),
+  'ui.alarm': seeded(1, 77, (s, r) => ui('alarm', s, r)),
   'noise.white': { n: 1, make: (sr) => mono(sr, whiteNoise(Math.round(2 * sr), makeRng(81))) },
   'noise.pink': { n: 1, make: (sr) => mono(sr, normalizePeak(pinkNoise(Math.round(3 * sr), makeRng(82)), 0.9)) },
   'noise.brown': { n: 1, low: true, make: (sr) => mono(sr, normalizePeak(brownNoise(Math.round(3 * sr), makeRng(83), 0.995), 0.9)) },
@@ -752,5 +763,5 @@ export const PREWARM_ORDER: ClipName[] = [
   'gun.vickers', 'gun.spandau', 'gun.lewis', 'crackle', 'hit', 'hit.thud', 'hit.confirm', 'whiz',
   'ir', 'exp.crack', 'exp.boom', 'exp.tail', 'exp.debris', 'flak', 'artillery',
   'eng.heavy.hi', 'eng.heavy.lo', 'jam', 'clear', 'bomb', 'balloon',
-  'ui.objective', 'ui.fail', 'ui.victory',
+  'ui.objective', 'ui.fail', 'ui.victory', 'ui.alarm',
 ];

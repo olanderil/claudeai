@@ -11,6 +11,7 @@ import { DEFAULT_LEVEL, type Level } from '../combat/Levels';
 import type { Sfx } from '../audio/Sfx';
 import { Mode, type ModeHost, type Report } from './Mode';
 import { QuickBattle } from './QuickBattle';
+import { Scramble } from './Scramble';
 import { MISSIONS, type MissionInfo } from './Campaign';
 
 /**
@@ -50,7 +51,7 @@ export type GameState = 'attract' | 'playing' | 'over';
 
 export interface GameEvents {
   notify(text: string, sub?: string, seconds?: number): void;
-  cue(kind: 'objective' | 'fail' | 'victory'): void;
+  cue(kind: 'objective' | 'fail' | 'victory' | 'alarm'): void;
   killCam(subject: { position: THREE.Vector3; velocity: THREE.Vector3 }): void;
   subjectChanged(v: PlaneVisual | null): void;
   hurt(): void;
@@ -153,6 +154,18 @@ export class Game {
 
   startQuickBattle(team: Team, aircraft: AirframeId, livery?: string): void {
     this.begin(new QuickBattle(this.battle, this.host, { team, aircraft, livery }), null);
+  }
+
+  /** Scramble: on the grass, with a raid on the way. */
+  startScramble(team: Team, aircraft: AirframeId, livery?: string): void {
+    this.begin(new Scramble(this.battle, this.host, { team, aircraft, livery }), null);
+  }
+
+  /** Which kind of sortie is running, for restarting the same one. */
+  get kind(): 'quick' | 'scramble' | 'mission' | null {
+    if (!this.mode) return null;
+    if (this.mission) return 'mission';
+    return this.mode instanceof Scramble ? 'scramble' : 'quick';
   }
 
   startMission(info: MissionInfo, team: Team, aircraft: AirframeId, livery?: string): void {

@@ -30,6 +30,13 @@ Add `?quality=low|medium|high|ultra` to the URL to pick the graphics preset up f
 - **Quick Battle** — offensive patrol against endless, escalating waves of enemy scouts,
   with an ace leading from the third wave. Kite balloons over the enemy lines for the taking.
   Three machines; land at your aerodrome and stop to refit.
+- **Scramble** — the alarm bell goes with you on the grass. Bombers and their escort are
+  on the way to your aerodrome, with their time of arrival counting down: open the
+  throttle, get off the ground, climb to meet them while your wingmen roll after you and
+  the field's guns open up, and keep the hangars standing. The raiders come in over the
+  lowest ground — through the pass, in the Alps. Between raids, land to refuel and rearm;
+  a gentle three-pointer is worth points. Each raid is heavier than the last, until the
+  hangars burn or your machines run out.
 - **Campaign** — eight sorties, each with its own front, hour and weather, briefed from
   whichever side you fly for: Dawn Patrol (Flanders), Balloon Busting (Somme), Escort
   (Isonzo), Trench Strafing (Verdun), Night Intercept — a Zeppelin under searchlights

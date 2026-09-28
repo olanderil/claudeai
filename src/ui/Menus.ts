@@ -12,6 +12,7 @@ import type { Report } from '../game/Mode';
 
 export interface MenuActions {
   quickBattle(): void;
+  scramble(): void;
   watch(): void;
   fly(mission: MissionInfo): void;
   resume(): void;
@@ -178,6 +179,7 @@ export class Menus {
     render();
     for (const [id, fn] of [
       ['choose-battle', () => this.actions.quickBattle()],
+      ['choose-scramble', () => this.actions.scramble()],
       ['choose-watch', () => this.actions.watch()],
       ['choose-campaign', () => this.showCampaign()],
     ] as const) {

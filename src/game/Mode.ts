@@ -27,7 +27,7 @@ export interface Objective {
 export interface ModeHost {
   notify(text: string, sub?: string, seconds?: number): void;
   /** Soft UI cue. */
-  cue(kind: 'objective' | 'fail' | 'victory'): void;
+  cue(kind: 'objective' | 'fail' | 'victory' | 'alarm'): void;
   /** Ask the camera for a kill cam on this aircraft/target position. */
   killCam(subject: { position: THREE.Vector3; velocity: THREE.Vector3 }): void;
   /** Called after (re)spawn so the camera can snap to the new machine. */
