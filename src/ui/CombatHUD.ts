@@ -3,25 +3,34 @@ import { clamp } from '../util/math';
 import { aerodromes, frontZ } from '../world/Front';
 import type { Battle } from '../combat/Battle';
 import type { Plane } from '../combat/Plane';
+import type { Target } from '../combat/Targets';
 import { BULLET_GRAVITY, BULLET_SPEED, type Team } from '../combat/Types';
 import type { Objective } from '../game/Mode';
 
 /**
  * The combat HUD. Deliberately sparse: a gunsight where the guns converge,
- * brackets on the machines worth knowing about, a lead pip on the one you're
+ * markers on the machines worth knowing about, a lead pip on the one you're
  * fighting, and the handful of numbers a 1917 pilot actually watched — speed,
  * height, gun heat, rounds left. Everything else stays off the glass.
  *
  * Same visual language as the rest of the interface: thin lines, spaced
- * small caps, one warm accent.
+ * small caps, one warm accent. The enemy is signal cyan and shaped by what
+ * it is — a diamond in the air, a circle for a balloon, a square on the
+ * ground — so friend, foe and objective read apart at a glance. What's off
+ * screen is pointed to from a ring around the sight, and a machine sitting
+ * on your tail lights an amber arc on that ring.
  */
 
 const INK = 'rgba(246, 239, 224, 0.94)';
 const DIM = 'rgba(246, 239, 224, 0.52)';
 const FAINT = 'rgba(246, 239, 224, 0.22)';
 const ACCENT = '#f2c46d';
-const ENEMY = '#ff6a55';
-const FRIEND = '#8fc8ff';
+/** Signal cyan: everything of the enemy's, and nothing else. */
+const ENEMY = '#5fd4ff';
+const ENEMY_SOFT = 'rgba(95, 212, 255, 0.5)';
+const FRIEND = 'rgba(246, 239, 224, 0.8)';
+/** Someone on your tail. */
+const THREAT = '#ffa938';
 const WARN = '#ff5f4f';
 const SHADOW = 'rgba(8, 10, 12, 0.55)';
 const MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
@@ -74,6 +83,17 @@ export class CombatHUD {
   private hitMark = 0;
   private readonly p1: Proj = { x: 0, y: 0, on: false, behind: false, vx: 0, vy: 0 };
   private readonly p2: Proj = { x: 0, y: 0, on: false, behind: false, vx: 0, vy: 0 };
+  /** Where the sight is this frame: the centre of the pointer ring. */
+  private sx = 0;
+  private sy = 0;
+  /** Enemies marked last frame, to catch the moment one goes down. */
+  private marked = new Set<Plane>();
+  private markedNext = new Set<Plane>();
+  private readonly kills: { p: Plane; t: number; r: number }[] = [];
+  /** Wingmen's letters, handed out in the order they're first seen. */
+  private letters = new WeakMap<Plane, string>();
+  private lettered = 0;
+  private lastTime = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -112,11 +132,26 @@ export class CombatHUD {
     this.hurt = Math.max(0, this.hurt - dt * 1.4);
     this.hitMark = Math.max(0, this.hitMark - dt);
     const p = f.player;
+    if (f.battle.time < this.lastTime - 0.5) {
+      // A new sortie.
+      this.letters = new WeakMap();
+      this.lettered = 0;
+      this.marked.clear();
+      this.kills.length = 0;
+    }
+    this.lastTime = f.battle.time;
     if (this.hurt > 0) this.drawHurt();
     this.drawStatus(f);
-    if (!p || !p.alive) return;
+    if (!p || !p.alive) {
+      this.marked.clear();
+      return;
+    }
     p.axes();
-    this.drawMarkers(f, p);
+    _v.copy(p.position).addScaledVector(p.fwd, p.type.converge);
+    const sp = this.project(_v, f.camera, this.p1);
+    this.sx = sp.behind ? this.width / 2 : clamp(sp.x, this.width * 0.2, this.width * 0.8);
+    this.sy = sp.behind ? this.height / 2 : clamp(sp.y, this.height * 0.2, this.height * 0.8);
+    this.drawMarkers(f, p, dt);
     this.drawSight(f, p);
     this.drawHeading(p);
     this.drawFlight(p);
@@ -240,14 +275,29 @@ export class CombatHUD {
         _v.y += 0.5 * BULLET_GRAVITY * tof * tof;
         const lp = this.project(_v, f.camera, this.p2);
         if (lp.on) {
-          const onIt = Math.hypot(lp.x - x, lp.y - y) < R * 0.9;
+          const gap = Math.hypot(lp.x - x, lp.y - y);
+          const onIt = gap < R * 0.9;
+          // A hairline from the sight to the pip: which way to pull, and how far.
+          if (gap > R + 8 * s) {
+            const ux = (lp.x - x) / gap;
+            const uy = (lp.y - y) / gap;
+            ctx.save();
+            ctx.globalAlpha = 0.55;
+            ctx.beginPath();
+            ctx.moveTo(x + ux * (R + 3 * s), y + uy * (R + 3 * s));
+            ctx.lineTo(lp.x - ux * 7 * s, lp.y - uy * 7 * s);
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = ENEMY;
+            ctx.stroke();
+            ctx.restore();
+          }
           ctx.beginPath();
-          ctx.arc(lp.x, lp.y, 5 * s, 0, Math.PI * 2);
+          ctx.arc(lp.x, lp.y, 4.5 * s, 0, Math.PI * 2);
           this.stroke(ENEMY, 1.4);
           if (onIt) {
             ctx.fillStyle = ENEMY;
             ctx.beginPath();
-            ctx.arc(lp.x, lp.y, 2.6 * s, 0, Math.PI * 2);
+            ctx.arc(lp.x, lp.y, 2.4 * s, 0, Math.PI * 2);
             ctx.fill();
           }
         }
@@ -255,100 +305,316 @@ export class CombatHUD {
     }
   }
 
-  private brackets(x: number, y: number, r: number, color: string, lw: number): void {
+  /**
+   * A diamond drawn as four strokes that stop short of the corners: light
+   * enough to sit over a distant speck without hiding it.
+   */
+  private diamond(x: number, y: number, r: number, color: string, lw: number, spin = 0): void {
     const ctx = this.ctx;
-    const l = Math.max(4, r * 0.42);
+    const k0 = 0.2;
+    const k1 = 0.8;
+    const pts: [number, number][] = [];
+    for (let i = 0; i < 4; i++) {
+      const a = spin + (i * Math.PI) / 2 - Math.PI / 2;
+      pts.push([x + Math.cos(a) * r, y + Math.sin(a) * r]);
+    }
     ctx.beginPath();
-    for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const) {
-      ctx.moveTo(x + sx * r, y + sy * (r - l));
-      ctx.lineTo(x + sx * r, y + sy * r);
-      ctx.lineTo(x + sx * (r - l), y + sy * r);
+    for (let i = 0; i < 4; i++) {
+      const [ax, ay] = pts[i];
+      const [bx, by] = pts[(i + 1) % 4];
+      ctx.moveTo(ax + (bx - ax) * k0, ay + (by - ay) * k0);
+      ctx.lineTo(ax + (bx - ax) * k1, ay + (by - ay) * k1);
     }
     this.stroke(color, lw);
   }
 
-  private edgeArrow(pr: Proj, color: string, size: number, alpha: number): { x: number; y: number } {
+  /** Square for things on the ground, same broken-corner stroke. */
+  private square(x: number, y: number, r: number, color: string, lw: number): void {
     const ctx = this.ctx;
+    const g = r * 0.34;
+    ctx.beginPath();
+    for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const) {
+      // Each side, broken at its ends.
+      if (sy === -1 || sy === 1) {
+        ctx.moveTo(x - r + g, y + sy * r);
+        ctx.lineTo(x + r - g, y + sy * r);
+      }
+      if (sx === -1 || sx === 1) {
+        ctx.moveTo(x + sx * r, y - r + g);
+        ctx.lineTo(x + sx * r, y + r - g);
+      }
+    }
+    this.stroke(color, lw);
+  }
+
+  /** Circle for balloons and the airship. */
+  private ring(x: number, y: number, r: number, color: string, lw: number): void {
+    const ctx = this.ctx;
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2 + Math.PI / 4;
+      ctx.moveTo(x + Math.cos(a - 0.62) * r, y + Math.sin(a - 0.62) * r);
+      ctx.arc(x, y, r, a - 0.62, a + 0.62);
+    }
+    this.stroke(color, lw);
+  }
+
+  /**
+   * The lock: four small arrowheads outside the marker that close in as the
+   * target comes into gun range, and sit snug and pulse gently when it's
+   * there. Returns how far out they are, for placing the labels.
+   */
+  private lockTicks(x: number, y: number, r: number, d: number, converge: number, time: number): number {
+    const ctx = this.ctx;
+    const s = this.scale;
+    const near = clamp(1 - (d - converge) / 700, 0, 1);
+    const inRange = d < converge * 1.8;
+    const off = r + (3 + 20 * (1 - near) + (inRange ? (1 + Math.sin(time * 9)) * 0.8 : 0)) * s;
+    const k = (inRange ? 4.6 : 3.8) * s;
+    ctx.save();
+    ctx.fillStyle = ENEMY;
+    ctx.shadowColor = SHADOW;
+    ctx.shadowBlur = 3;
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2 - Math.PI / 2;
+      const c = Math.cos(a);
+      const sn = Math.sin(a);
+      // Tip toward the target, base outside.
+      const tx = x + c * off;
+      const ty = y + sn * off;
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(tx + c * k * 1.3 - sn * k * 0.8, ty + sn * k * 1.3 + c * k * 0.8);
+      ctx.lineTo(tx + c * k * 1.3 + sn * k * 0.8, ty + sn * k * 1.3 - c * k * 0.8);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+    return off + k * 1.3;
+  }
+
+  /** Where the pointer ring sits, and its radius. */
+  private ringRadius(): number {
+    return Math.min(this.height * 0.3, this.width * 0.4);
+  }
+
+  /** Direction on screen (radians, y down) to something projected. */
+  private screenAngle(pr: Proj): number {
     let ax = pr.vx;
     let ay = -pr.vy;
     if (pr.behind && Math.abs(ax) + Math.abs(ay) < 1e-3) ay = 1;
-    const ang = Math.atan2(ay, ax);
-    const rx = this.width / 2 - 56 * this.scale;
-    const ry = this.height / 2 - 56 * this.scale;
-    const px = this.width / 2 + Math.cos(ang) * rx;
-    const py = this.height / 2 + Math.sin(ang) * ry;
+    if (!pr.behind && pr.x >= 0 && pr.x <= this.width && pr.y >= 0 && pr.y <= this.height) {
+      ax = pr.x - this.sx;
+      ay = pr.y - this.sy;
+    }
+    return Math.atan2(ay, ax);
+  }
+
+  /** A pointer on the ring toward something off screen. Returns where it sits. */
+  private pointer(pr: Proj, color: string, size: number, alpha: number, solid: boolean): { x: number; y: number; a: number } {
+    const ctx = this.ctx;
+    const ang = this.screenAngle(pr);
+    const R = this.ringRadius();
+    const px = this.sx + Math.cos(ang) * R;
+    const py = this.sy + Math.sin(ang) * R;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(px, py);
     ctx.rotate(ang);
     ctx.beginPath();
-    ctx.moveTo(size, 0);
-    ctx.lineTo(-size * 0.6, size * 0.62);
-    ctx.lineTo(-size * 0.25, 0);
-    ctx.lineTo(-size * 0.6, -size * 0.62);
-    ctx.closePath();
-    ctx.fillStyle = color;
-    ctx.fill();
+    ctx.moveTo(-size * 0.55, -size * 0.75);
+    ctx.lineTo(size * 0.45, 0);
+    ctx.lineTo(-size * 0.55, size * 0.75);
+    if (solid) {
+      ctx.lineTo(-size * 0.2, 0);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+    } else {
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      this.stroke(color, 1.6);
+    }
     ctx.restore();
-    return { x: px, y: py };
+    return { x: px, y: py, a: ang };
   }
 
-  private drawMarkers(f: HudFrame, p: Plane): void {
+  /** Text just outside the ring, beside a pointer. */
+  private ringLabel(at: { x: number; y: number; a: number }, str: string, color: string): void {
+    const o = 20 * this.scale;
+    this.text(str, at.x + Math.cos(at.a) * o, at.y + Math.sin(at.a) * o + 4 * this.scale, color, 10, 'center');
+  }
+
+  private drawMarkers(f: HudFrame, p: Plane, dt: number): void {
     const s = this.scale;
+    const ctx = this.ctx;
     const cam = f.camera;
     const focal = this.height / 2 / Math.tan((cam.fov * Math.PI) / 360);
     const yd = p.team === 'allied';
+    const objectiveAt = new Set<THREE.Vector3>();
+    for (const o of f.objectives) if (o.marker && !o.done && !o.failed) objectiveAt.add(o.marker);
+
+    // Balloons, the airship and things on the ground.
+    for (const t of f.battle.targets) {
+      if (!t.alive || t.team === p.team || t.kind === 'winch') continue;
+      const d = t.position.distanceTo(p.position);
+      const air = t.kind === 'balloon' || t.kind === 'zeppelin';
+      const objective = objectiveAt.has(t.position);
+      if (!objective && d > (air ? 4500 : 900)) continue;
+      const pr = this.project(t.position, cam, this.p2);
+      if (!pr.on) continue;
+      const r = Math.max((air ? 7 : 5.5) * s, (t.reach / Math.max(d, 1)) * focal * (air ? 0.8 : 1));
+      const col = objective || air ? ENEMY : ENEMY_SOFT;
+      if (air) this.ring(pr.x, pr.y, r, col, objective ? 1.5 : 1.1);
+      else this.square(pr.x, pr.y, r, col, objective ? 1.5 : 1);
+      if (objective || d < 1500) this.text(distance(d, yd), pr.x, pr.y + r + 13 * s, col, 10, 'center');
+    }
+
+    // Aircraft.
+    const next = this.markedNext;
+    next.clear();
     for (const o of f.battle.planes) {
       if (o === p || !o.alive) continue;
       const enemy = o.team !== p.team;
       const d = o.position.distanceTo(p.position);
       if (d > 5000 || (!enemy && d > 2500)) continue;
-      if (o.role === 'parked' && d > 1500) continue;
+      const parked = o.role === 'parked';
+      if (parked && d > 1500) continue;
       const isT = o === f.target;
-      const col = enemy ? ENEMY : FRIEND;
       const pr = this.project(o.position, cam, this.p2);
+      if (enemy) next.add(o);
       if (pr.on) {
         const r = Math.max(8 * s, ((o.radius * 1.1) / d) * focal);
-        if (enemy) {
-          this.brackets(pr.x, pr.y, r, col, isT ? 1.8 : 1);
-          if (isT || d < 1100) this.text(distance(d, yd), pr.x, pr.y + r + 13 * s, col, 10, 'center');
-          if (isT) this.label(o.name, pr.x, pr.y - r - 7 * s, col, 'center');
-        } else {
-          // A small chevron above friends; no box.
-          const ctx = this.ctx;
-          const cy = pr.y - Math.max(10 * s, r);
+        if (!enemy) {
+          // An ivory chevron over a wingman, with his letter.
+          let letter = this.letters.get(o);
+          if (!letter) {
+            letter = 'ABCDEFGHJK'[this.lettered++ % 10];
+            this.letters.set(o, letter);
+          }
+          const cy = pr.y - Math.max(10 * s, r) - 2 * s;
           ctx.beginPath();
           ctx.moveTo(pr.x - 5 * s, cy - 5 * s);
           ctx.lineTo(pr.x, cy);
           ctx.lineTo(pr.x + 5 * s, cy - 5 * s);
-          this.stroke(col, 1.3);
+          this.stroke(FRIEND, 1.3);
+          this.text(letter, pr.x, cy - 9 * s, FRIEND, 9, 'center', 700);
+          continue;
         }
-      } else if (enemy && (isT || d < 2500)) {
-        const at = this.edgeArrow(pr, col, (isT ? 10 : 7) * s, isT ? 1 : 0.7);
-        if (isT) this.text(distance(d, yd), at.x, at.y + 18 * s, col, 10, 'center');
+        if (parked) {
+          this.square(pr.x, pr.y, r, ENEMY_SOFT, 1);
+          continue;
+        }
+        const rr = r * 1.15;
+        this.diamond(pr.x, pr.y, rr, ENEMY, isT ? 1.6 : 1.1);
+        let ext = rr;
+        if (isT) {
+          ext = this.lockTicks(pr.x, pr.y, rr, d, p.type.converge, f.time);
+          this.label(o.name, pr.x, pr.y - ext - 7 * s, ENEMY, 'center');
+        }
+        if (isT || d < 1000) this.text(distance(d, yd), pr.x, pr.y + ext + 14 * s, ENEMY, 10, 'center');
+      } else if (enemy && !parked && (isT || d < 2500)) {
+        const at = this.pointer(pr, ENEMY, (isT ? 11 : 7.5) * s, isT ? 1 : 0.75, isT);
+        if (isT) this.ringLabel(at, distance(d, yd), ENEMY);
       }
     }
-    // Objective markers.
+    // The moment one goes down: its diamond folds in on itself.
+    for (const o of this.marked) {
+      if (!next.has(o) && !o.alive && o.state !== 'ground') {
+        const d = o.position.distanceTo(p.position);
+        this.kills.push({ p: o, t: 0, r: Math.max(8 * s, ((o.radius * 1.1) / Math.max(d, 1)) * focal) * 1.15 });
+      }
+    }
+    this.markedNext = this.marked;
+    this.marked = next;
+    for (let i = this.kills.length - 1; i >= 0; i--) {
+      const k = this.kills[i];
+      k.t += dt;
+      const u = k.t / 0.7;
+      if (u >= 1) {
+        this.kills.splice(i, 1);
+        continue;
+      }
+      const pr = this.project(k.p.position, cam, this.p2);
+      if (!pr.on) continue;
+      ctx.save();
+      ctx.globalAlpha = 1 - u * u;
+      this.diamond(pr.x, pr.y, k.r * (1 - u) ** 2 + 1, ENEMY, 1.8, u * Math.PI * 0.5);
+      ctx.beginPath();
+      for (let j = 0; j < 4; j++) {
+        const a = (j * Math.PI) / 2 + Math.PI / 4;
+        const r0 = k.r * (0.4 + u * 1.2);
+        const r1 = r0 + k.r * 0.5 * (1 - u);
+        ctx.moveTo(pr.x + Math.cos(a) * r0, pr.y + Math.sin(a) * r0);
+        ctx.lineTo(pr.x + Math.cos(a) * r1, pr.y + Math.sin(a) * r1);
+      }
+      this.stroke(INK, 1.4);
+      ctx.restore();
+    }
+
+    // Objectives: a brass caret over the target, or a pointer on the ring.
     for (const o of f.objectives) {
       if (!o.marker || o.done || o.failed) continue;
       const d = o.marker.distanceTo(p.position);
       const pr = this.project(o.marker, cam, this.p2);
+      const target = f.battle.targets.find((t) => t.position === o.marker) ?? null;
       if (pr.on) {
-        const ctx = this.ctx;
-        const r = 7 * s;
+        const lift = target ? Math.max(9 * s, (target.reach / Math.max(d, 1)) * focal) + 8 * s : 0;
+        const cy = pr.y - lift;
+        const r = 6 * s;
         ctx.beginPath();
-        ctx.moveTo(pr.x, pr.y - r);
-        ctx.lineTo(pr.x + r, pr.y);
-        ctx.lineTo(pr.x, pr.y + r);
-        ctx.lineTo(pr.x - r, pr.y);
-        ctx.closePath();
-        this.stroke(ACCENT, 1.3);
-        this.text(distance(d, yd), pr.x, pr.y + r + 14 * s, ACCENT, 10, 'center');
+        ctx.moveTo(pr.x - r, cy - r * 1.1);
+        ctx.lineTo(pr.x, cy);
+        ctx.lineTo(pr.x + r, cy - r * 1.1);
+        if (!target) {
+          ctx.moveTo(pr.x - r, cy + r * 1.1);
+          ctx.lineTo(pr.x, cy);
+          ctx.lineTo(pr.x + r, cy + r * 1.1);
+        }
+        this.stroke(ACCENT, 1.6);
+        if (!isEnemyTarget(target, p)) this.text(distance(d, yd), pr.x, cy + (target ? 0 : r * 1.1) + 16 * s, ACCENT, 10, 'center');
       } else {
-        const at = this.edgeArrow(pr, ACCENT, 9 * s, 0.95);
-        this.text(distance(d, yd), at.x, at.y + 18 * s, ACCENT, 10, 'center');
+        const at = this.pointer(pr, ACCENT, 10 * s, 0.95, true);
+        this.ringLabel(at, distance(d, yd), ACCENT);
       }
     }
+
+    this.drawThreat(f, p);
+  }
+
+  /** An amber arc on the ring toward a machine on your tail; it pulses when he fires. */
+  private drawThreat(f: HudFrame, p: Plane): void {
+    let best: Plane | null = null;
+    let bd = 650;
+    for (const o of f.battle.planes) {
+      if (!o.alive || o.team === p.team || o.type.guns === 0 || o.role === 'parked') continue;
+      _rel.subVectors(p.position, o.position);
+      const d = _rel.length();
+      if (d > bd || d < 1) continue;
+      o.axes();
+      if (o.fwd.dot(_rel.divideScalar(d)) > 0.85) {
+        bd = d;
+        best = o;
+      }
+    }
+    if (!best) return;
+    const pr = this.project(best.position, f.camera, this.p2);
+    const ang = this.screenAngle(pr);
+    const R = this.ringRadius();
+    const firing = (f.battle.visualOf(best)?.firingT ?? 0) > 0;
+    const close = clamp(1 - bd / 650, 0, 1);
+    const ctx = this.ctx;
+    const span = 0.16 + close * 0.14;
+    ctx.save();
+    ctx.globalAlpha = firing ? 0.75 + 0.25 * Math.sin(f.time * 30) : 0.45 + close * 0.35;
+    ctx.beginPath();
+    ctx.arc(this.sx, this.sy, R, ang - span, ang + span);
+    ctx.lineCap = 'round';
+    this.stroke(THREAT, firing ? 3.2 : 2.2);
+    ctx.beginPath();
+    ctx.arc(this.sx, this.sy, R - 6 * this.scale, ang - span * 0.6, ang + span * 0.6);
+    this.stroke(THREAT, 1);
+    ctx.restore();
   }
 
   private drawHeading(p: Plane): void {
@@ -568,7 +834,7 @@ export class CombatHUD {
     for (const t of f.battle.targets) {
       if (!t.alive || (t.kind !== 'balloon' && t.kind !== 'zeppelin')) continue;
       const [mx, my] = toMap(t.position.x, t.position.z);
-      ctx.fillStyle = t.team === p.team ? FRIEND : ACCENT;
+      ctx.fillStyle = t.team === p.team ? FRIEND : ENEMY;
       ctx.beginPath();
       ctx.arc(mx, my, (t.kind === 'zeppelin' ? 3.6 : 2.4) * s, 0, Math.PI * 2);
       ctx.fill();
@@ -633,6 +899,10 @@ export class CombatHUD {
     ctx.lineTo(x, y + 6 * s);
     this.stroke(INK, 1.3);
   }
+}
+
+function isEnemyTarget(t: Target | null, p: Plane): boolean {
+  return t !== null && t.team !== p.team;
 }
 
 function distance(m: number, imperial: boolean): string {

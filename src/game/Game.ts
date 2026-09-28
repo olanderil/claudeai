@@ -7,6 +7,7 @@ import type { Plane } from '../combat/Plane';
 import type { Brain } from '../combat/Brain';
 import type { PlaneVisual } from '../combat/PlaneVisual';
 import { FIGHTERS, type AirframeId, type Team } from '../combat/Types';
+import { DEFAULT_LEVEL, type Level } from '../combat/Levels';
 import type { Sfx } from '../audio/Sfx';
 import { Mode, type ModeHost, type Report } from './Mode';
 import { QuickBattle } from './QuickBattle';
@@ -73,6 +74,8 @@ export class Game {
   /** The AI is flying the player's machine (watch mode). */
   autopilot = false;
   readonly pilot: PilotSettings = { ...DEFAULT_PILOT };
+  /** The opponents' level for the sorties that follow. */
+  level: Level = DEFAULT_LEVEL;
   private kp = 0;
   private kr = 0;
   private ky = 0;
@@ -134,6 +137,7 @@ export class Game {
   private begin(mode: Mode, mission: MissionInfo | null): void {
     this.battle.clear();
     this.battle.resetTerrain();
+    this.battle.level = this.level;
     this.mode = mode;
     this.mission = mission;
     this.state = 'playing';
@@ -172,6 +176,7 @@ export class Game {
     this.mode = null;
     this.mission = null;
     this.state = 'attract';
+    this.battle.level = DEFAULT_LEVEL;
     this.autopilot = false;
     this.attractT = 0;
     this.attractSubject = null;
@@ -183,6 +188,15 @@ export class Game {
   worldChanged(): void {
     this.battle.resetTerrain();
     if (this.state === 'attract') this.startAttract();
+  }
+
+  /** Change the opponents' level; in a sortie it applies to what spawns next. */
+  setLevel(level: Level): void {
+    this.level = level;
+    if (this.state === 'attract') return;
+    this.battle.level = level;
+    const p = this.player;
+    if (p) p.stallGuard = level.stallGuard;
   }
 
   setAutopilot(on: boolean): void {
@@ -299,6 +313,7 @@ export class Game {
   }
 
   private updateTargeting(dt: number): void {
+    this.battle.assistTarget = this.target;
     const p = this.player;
     if (!p || !p.alive) {
       this.target = null;

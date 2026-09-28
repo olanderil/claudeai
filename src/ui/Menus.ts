@@ -1,4 +1,5 @@
 import { FIGHTERS, TYPES, type AirframeId, type Team } from '../combat/Types';
+import { LEVELS, levelById, type Level } from '../combat/Levels';
 import { MISSIONS, type MissionInfo } from '../game/Campaign';
 import type { Report } from '../game/Mode';
 
@@ -18,6 +19,8 @@ export interface MenuActions {
   quit(): void;
   help(): void;
   select(): void;
+  /** The opponents' level was picked. */
+  level(level: Level): void;
 }
 
 const SIDES: { team: Team; label: string; note: string }[] = [
@@ -45,6 +48,9 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 export class Menus {
   team: Team = 'allied';
   aircraft: AirframeId = 'camel';
+  level: Level = levelById(null);
+  /** Redraws the main-menu pickers. */
+  private renderPickers: () => void = () => {};
   private readonly root = document.getElementById('screens') as HTMLDivElement;
   private readonly screens = new Map<string, HTMLDivElement>();
   private current: string | null = null;
@@ -52,11 +58,24 @@ export class Menus {
 
   constructor(private readonly actions: MenuActions) {
     this.done = new Set(this.load<string[]>(STORE, []));
-    const pick = this.load<{ team?: Team; aircraft?: AirframeId }>(PICK, {});
+    const pick = this.load<{ team?: Team; aircraft?: AirframeId; level?: string }>(PICK, {});
     if (pick.team === 'allied' || pick.team === 'central') this.team = pick.team;
     if (pick.aircraft && FIGHTERS[this.team].includes(pick.aircraft)) this.aircraft = pick.aircraft;
     else this.aircraft = FIGHTERS[this.team][0];
+    this.level = levelById(pick.level);
     this.buildPickers();
+  }
+
+  private savePick(): void {
+    this.save(PICK, { team: this.team, aircraft: this.aircraft, level: this.level.id });
+  }
+
+  /** Set the level from elsewhere (the Controls tab). */
+  setLevel(level: Level): void {
+    if (level === this.level) return;
+    this.level = level;
+    this.savePick();
+    this.renderPickers();
   }
 
   private load<T>(key: string, fallback: T): T {
@@ -90,6 +109,8 @@ export class Menus {
     const side = document.getElementById('pick-side');
     const plane = document.getElementById('pick-plane');
     const note = document.getElementById('pick-note');
+    const level = document.getElementById('pick-level');
+    const levelNote = document.getElementById('pick-level-note');
     if (!side || !plane || !note) return;
     const render = (): void => {
       side.textContent = '';
@@ -104,7 +125,7 @@ export class Menus {
           if (this.team !== s.team) {
             this.team = s.team;
             this.aircraft = FIGHTERS[s.team][0];
-            this.save(PICK, { team: this.team, aircraft: this.aircraft });
+            this.savePick();
             this.actions.select();
             render();
           }
@@ -121,7 +142,7 @@ export class Menus {
           e.stopPropagation();
           b.blur();
           this.aircraft = id;
-          this.save(PICK, { team: this.team, aircraft: this.aircraft });
+          this.savePick();
           this.actions.select();
           render();
         });
@@ -130,7 +151,30 @@ export class Menus {
       note.textContent = PLANE_NOTES[this.aircraft] ?? '';
       const help = document.getElementById('help-plane');
       if (help) help.textContent = TYPES[this.aircraft].name;
+      if (level) {
+        level.textContent = '';
+        level.append(el('span', 'c-seg-label', 'Opponents'));
+        for (const l of LEVELS) {
+          const b = el('button', undefined, l.name);
+          b.type = 'button';
+          b.setAttribute('role', 'radio');
+          b.setAttribute('aria-checked', String(l === this.level));
+          b.addEventListener('click', (e) => {
+            e.stopPropagation();
+            b.blur();
+            if (l === this.level) return;
+            this.level = l;
+            this.savePick();
+            this.actions.select();
+            this.actions.level(l);
+            render();
+          });
+          level.append(b);
+        }
+      }
+      if (levelNote) levelNote.textContent = this.level.note;
     };
+    this.renderPickers = render;
     render();
     for (const [id, fn] of [
       ['choose-battle', () => this.actions.quickBattle()],
@@ -234,7 +278,7 @@ export class Menus {
 
   showBriefing(m: MissionInfo): void {
     this.screen('briefing', (card) => {
-      card.append(el('div', 'eyebrow', `Mission ${MISSIONS.indexOf(m) + 1} · ${TYPES[this.aircraft].name}`));
+      card.append(el('div', 'eyebrow', `Mission ${MISSIONS.indexOf(m) + 1} · ${TYPES[this.aircraft].name} · ${this.level.name} opponents`));
       const h = el('h2');
       h.innerHTML = `<span class="accent">${m.name}</span>`;
       card.append(h, el('div', 'place', `${m.place[this.team]} · ${m.date} · ${m.time.toLowerCase()}`));

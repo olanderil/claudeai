@@ -1151,9 +1151,22 @@
         min-height: 1.6em; font-size: 11.5px; line-height: 1.6; letter-spacing: 0.03em;
         color: rgba(236, 229, 216, 0.7); max-width: 420px;
       }
+      /* The opponents' level: a lighter row under the machine, labelled inline. */
+      .c-level { margin-top: 4px; align-items: center; background: transparent; }
+      .c-level button { padding: 7px 13px; font-size: 9.5px; }
+      .c-level button[aria-checked="true"] {
+        color: #f5efe3; background: rgba(242, 196, 109, 0.14);
+        box-shadow: inset 0 0 0 1px rgba(242, 196, 109, 0.55);
+      }
+      .c-seg-label {
+        font-size: 9px; letter-spacing: 0.24em; text-transform: uppercase;
+        color: rgba(214, 200, 176, 0.55); padding: 0 10px 0 9px;
+      }
+      .c-level-note { font-size: 10.5px; color: rgba(236, 229, 216, 0.5); min-height: 3.2em; }
       @media (max-width: 560px) {
         .c-seg { flex-wrap: wrap; justify-content: center; }
         .c-seg button { padding: 8px 11px; letter-spacing: 0.14em; }
+        .c-seg-label { flex-basis: 100%; text-align: center; padding: 2px 0 4px; }
       }
 
       /* ---- Screens over the flight -----------------------------------------
@@ -1654,6 +1667,8 @@
           <div class="c-seg" id="pick-side" role="radiogroup" aria-label="Side"></div>
           <div class="c-seg" id="pick-plane" role="radiogroup" aria-label="Aircraft"></div>
           <p class="c-note" id="pick-note"></p>
+          <div class="c-seg c-level" id="pick-level" role="radiogroup" aria-label="Opponents"></div>
+          <p class="c-note c-level-note" id="pick-level-note"></p>
         </div>
         <div class="c-actions">
           <button id="choose-battle" type="button" class="c-primary">Quick Battle</button>

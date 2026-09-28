@@ -38,6 +38,13 @@ export interface FrontSettings {
   chalk: number;
   /** Water-logging, 0..1 — flooded shell holes and trench bottoms, as in Flanders. */
   flooded: number;
+  /**
+   * Altitude above which the ground drains, metres: shell holes on a ridge are
+   * dry however wet the valley below it is. Omitted: water lies everywhere.
+   * Mirrored in the terrain shader, so a hole the player sees full of water is
+   * one a bomb throws water out of.
+   */
+  floodLine?: number;
 }
 
 export const DEFAULT_FRONT: FrontSettings = {
@@ -139,7 +146,20 @@ export const frontUniforms = {
   uFrontOn: { value: 1 },
   /** Per-seed salt added to every crater salt, as a float (exact below 2^24). */
   uFrontSalt: { value: 13 },
+  /** Altitude above which shell holes and trenches drain (see `floodLine`). */
+  uFloodLine: { value: 1e6 },
 };
+
+/** Width of the band over which the ground goes from wet to drained, metres. */
+const FLOOD_BAND = 14;
+
+/**
+ * How much of the world's water-logging survives at this altitude, 0..1.
+ * Mirrored in GLSL (`bfFloodAt`).
+ */
+export function floodAt(h: number): number {
+  return 1 - smoothstep(frontUniforms.uFloodLine.value - FLOOD_BAND, frontUniforms.uFloodLine.value + FLOOD_BAND, h);
+}
 
 // ------------------------------------------------------------------- hashing
 
@@ -197,6 +217,7 @@ export function setFront(next: FrontSettings | undefined, seed: number): void {
   u.uWobFar.value.set(WOB_FAR[0], WOB_FAR[1], WOB_FAR[2]);
   u.uFrontOn.value = next === undefined ? 0 : 1;
   u.uFrontSalt.value = seedSalt;
+  u.uFloodLine.value = settings.floodLine ?? 1e6;
 }
 
 export function frontSettings(): Readonly<FrontSettings> {
@@ -396,7 +417,9 @@ function floodedCrater(x: number, z: number): boolean {
   const u = Math.abs(d) - nmlHalf(x, side);
   const dens = craterDensity(x, z, u);
   if (dens < 0.05) return false;
-  const wetShare = settings.flooded * 0.45;
+  const drained = settings.floodLine === undefined ? 1 : floodAt(groundProbe(x, z));
+  if (drained <= 0) return false;
+  const wetShare = settings.flooded * drained * 0.45;
   for (const [cell, salt, share, rMin, rSpan] of [
     [C1, SALT_C1, 0.9, 0.2, 0.25], [C2, SALT_C2, 0.62, 0.18, 0.26],
   ] as const) {
@@ -428,6 +451,35 @@ let waterProbe: (x: number, z: number) => boolean = () => false;
 
 export function setWaterProbe(fn: (x: number, z: number) => boolean): void {
   waterProbe = fn;
+}
+
+/** The finished ground, supplied by the world for the same reason. */
+let groundProbe: (x: number, z: number) => number = () => 0;
+
+export function setGroundProbe(fn: (x: number, z: number) => number): void {
+  groundProbe = fn;
+}
+
+/** Spacing of the samples `ridgeClearance` takes along its segment, metres. */
+const CLEARANCE_STEP = 150;
+
+/**
+ * The highest ground along a straight segment, metres above sea level.
+ *
+ * Sampled every ~150 m, both ends included, so a spawn altitude or an AI route
+ * can be set clear of whatever ridge lies between two points. A ridge narrower
+ * than the step can slip between samples; add a margin.
+ */
+export function ridgeClearance(x0: number, z0: number, x1: number, z1: number): number {
+  const len = Math.hypot(x1 - x0, z1 - z0);
+  const steps = Math.max(1, Math.ceil(len / CLEARANCE_STEP));
+  let top = -Infinity;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const h = groundProbe(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t);
+    if (h > top) top = h;
+  }
+  return top;
 }
 
 /** Sea, river, lake or flooded shell hole. */
@@ -811,11 +863,15 @@ export function planFrontSites(opts: SitePlanOptions): void {
 
     // ----------------------------------------------------- kite balloons
     // One winch every five or six kilometres, 1.5–2.5 km back, in the open.
+    // In mountains the open ground may be a valley floor further back: after
+    // the usual band has been tried, the search widens to find it rather than
+    // leaving the sector without a balloon.
     const along = [-11000, -5500, 0, 5500, 11000];
     for (let i = 0; i < along.length && anchors.length < 5; i++) {
-      for (let attempt = 0; attempt < 24; attempt++) {
-        const x = along[i] + (hash01(i, attempt, salt + 11) - 0.5) * 3000;
-        const u = 1500 + hash01(i, attempt, salt + 12) * 1000;
+      for (let attempt = 0; attempt < 48; attempt++) {
+        const wide = attempt >= 24;
+        const x = along[i] + (hash01(i, attempt, salt + 11) - 0.5) * (wide ? 4400 : 3000);
+        const u = wide ? 800 + hash01(i, attempt, salt + 12) * 4600 : 1500 + hash01(i, attempt, salt + 12) * 1000;
         const p = behind(x, u);
         if (!open(p.x, p.z, 40, 0.14)) continue;
         if (nearVillage(p.x, p.z, 450) || nearField(p.x, p.z, 300)) continue;
@@ -828,9 +884,11 @@ export function planFrontSites(opts: SitePlanOptions): void {
     // ------------------------------------------------ artillery batteries
     // Four guns abreast, 22 m apart, 1–3 km behind the fire trench.
     let batteries = 0;
-    for (let i = 0; i < 40 && batteries < 8; i++) {
+    for (let i = 0; i < 80 && batteries < 8; i++) {
+      // The same widening as the winches, once the usual band is exhausted.
+      if (i >= 40 && batteries >= 4) break;
       const x = -REACH_ALONG + ((i * 0.618034) % 1) * 2 * REACH_ALONG + (hash01(i, 3, salt + 21) - 0.5) * 1500;
-      const u = 1000 + hash01(i, 4, salt + 22) * 2000;
+      const u = i < 40 ? 1000 + hash01(i, 4, salt + 22) * 2000 : 800 + hash01(i, 4, salt + 22) * 4600;
       const c = behind(x, u);
       if (!open(c.x, c.z, 45, 0.12)) continue;
       if (nearVillage(c.x, c.z, 350) || nearField(c.x, c.z, 250)) continue;
@@ -963,6 +1021,7 @@ uniform vec3 uWobHome;
 uniform vec3 uWobFar;
 uniform float uFrontOn;
 uniform float uFrontSalt;
+uniform float uFloodLine;
 
 float bfFrontZ(float x) {
   vec4 a = uFrontK * x + uFrontP;
@@ -979,6 +1038,9 @@ float bfEdge(float s, float side) {
 float bfDensity(float u) {
   if (u <= 0.0) return 1.0;
   return 0.95 * exp(-u / 380.0) + 0.035 * (1.0 - smoothstep(1000.0, 2800.0, u));
+}
+float bfFloodAt(float h) {
+  return 1.0 - smoothstep(uFloodLine - ${FLOOD_BAND.toFixed(1)}, uFloodLine + ${FLOOD_BAND.toFixed(1)}, h);
 }
 float bfLump(vec2 p) {
   float v = 0.5 + 0.3 * sin(p.x * 0.0047 + 1.3) * cos(p.y * 0.0041 - 0.7)

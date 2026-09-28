@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { clamp } from '../util/math';
-import { aerodromes, balloonAnchors, farAerodrome, frontTargets, frontZ, homeAerodrome, type Aerodrome } from '../world/Front';
+import { aerodromes, balloonAnchors, farAerodrome, frontTargets, frontZ, homeAerodrome, ridgeClearance, type Aerodrome } from '../world/Front';
 import type { Battle, SpawnOptions } from '../combat/Battle';
 import type { Orders } from '../combat/Brain';
 import type { Plane } from '../combat/Plane';
@@ -97,8 +97,7 @@ export abstract class Mode {
     }
     if (p.team === this.enemy) {
       if (killer?.isPlayer) {
-        this.score += p.score;
-        this.host.notify(`${p.name} down`, `+${p.score}`, 2.6);
+        this.host.notify(`${p.name} down`, `+${this.award(p.score)}`, 2.6);
         this.host.killCam({ position: p.position, velocity: p.velocity });
       } else if (killer && killer.team === this.team) {
         this.host.notify('Wingman scored', p.name, 2.2);
@@ -110,10 +109,16 @@ export abstract class Mode {
 
   targetDestroyed(t: Target, by: Plane | null): void {
     if (by?.isPlayer && t.team === this.enemy) {
-      this.score += t.score;
-      this.host.notify(`${t.name} destroyed`, `+${t.score}`, 2.6);
+      this.host.notify(`${t.name} destroyed`, `+${this.award(t.score)}`, 2.6);
       if (t.kind === 'balloon' || t.kind === 'zeppelin') this.host.killCam({ position: t.position, velocity: t.velocity });
     }
+  }
+
+  /** Add points, weighted by the opponents' level. Returns what was added. */
+  protected award(points: number): number {
+    const n = Math.round(points * this.battle.level.score);
+    this.score += n;
+    return n;
   }
 
   landed(p: Plane): void {
@@ -209,7 +214,8 @@ export abstract class Mode {
     const h = this.home;
     const x = at?.x ?? h.x + rand(-80, 80);
     const z = at?.z ?? h.z - 350;
-    const y = at?.y ?? b.ground(x, z) + 650;
+    // High enough to clear whatever ridge stands between the field and the lines.
+    const y = at?.y ?? Math.max(b.ground(x, z) + 650, ridgeClearance(x, z, x, frontZ(x)) + 300);
     const heading = at?.heading ?? headingTo(x, z, x, frontZ(x));
     const p = b.spawn(this.config.aircraft, this.team, {
       x, y, z, heading, speed: 46, isPlayer: true, livery: this.config.livery,
@@ -251,21 +257,28 @@ export abstract class Mode {
     const r = new THREE.Vector3(Math.cos(heading), 0, -Math.sin(heading));
     const out: Plane[] = [];
     const types = opts.types ?? FIGHTERS[this.enemy];
+    const level = this.battle.level;
+    count = Math.max(1, count + level.flight);
     for (let i = 0; i < count; i++) {
       const ace = opts.ace === true && i === 0;
+      // At the Ace level every formation has a leader of nearly that quality.
+      const leader = !ace && i === 0 && level.leaders;
       const lat = (i - (count - 1) / 2) * 60;
       const back = Math.abs(i - (count - 1) / 2) * 35;
       const type = ace ? types[0] : pick(types);
       const extra: Partial<SpawnOptions> = ace
         ? { name: this.enemy === 'central' ? 'Red triplane' : 'Allied ace', hp: 150, score: 400,
           livery: this.enemy === 'central' ? 'red' : 'ace' }
-        : { livery: opts.liveries ? pick(opts.liveries) : 'standard' };
+        : leader
+          ? { name: this.enemy === 'central' ? 'Staffelführer' : 'Flight commander', hp: 120, score: 220,
+            livery: opts.liveries ? pick(opts.liveries) : 'standard' }
+          : { livery: opts.liveries ? pick(opts.liveries) : 'standard' };
       out.push(this.battle.spawn(type, this.enemy, {
         x: at.x + r.x * lat - f.x * back,
         y: at.y + rand(-20, 20),
         z: at.z + r.z * lat - f.z * back,
         heading, speed: 45,
-        skill: ace ? Math.min(skill + 0.25, 0.97) : clamp(skill + rand(-0.08, 0.08), 0.1, 0.92),
+        skill: ace ? Math.min(skill + 0.25, 0.97) : leader ? Math.min(skill + 0.15, 0.95) : clamp(skill + rand(-0.08, 0.08), 0.1, 0.92),
         orders: opts.orders, ...extra,
       }));
     }
@@ -350,7 +363,7 @@ export abstract class Mode {
     let z = from.z - distance;
     const b = this.battle;
     if (Math.hypot(x - b.arenaCentre.x, z - b.arenaCentre.z) > b.arenaRadius) z = from.z + distance * 0.5;
-    const y = Math.max(from.y + rand(50, 300), b.ground(x, z) + 450);
+    const y = Math.max(from.y + rand(50, 300), b.ground(x, z) + 450, ridgeClearance(x, z, from.x, from.z) + 200);
     return new THREE.Vector3(x, y, z);
   }
 

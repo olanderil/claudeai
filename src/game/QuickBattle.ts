@@ -42,12 +42,12 @@ export class QuickBattle extends Mode {
     const at = this.enemyApproach();
     const skill = Math.min(0.26 + 0.09 * (n - 1), 0.85);
     const p = this.player;
-    this.enemyFlight(count, at, p?.position ?? at, skill, { ace: n >= 3 });
+    const flight = this.enemyFlight(count, at, p?.position ?? at, skill, { ace: n >= this.battle.level.aceWave });
     if (n > 1) for (const b of this.balloons_) if (!b.alive) this.respawnBalloon(b);
     const have = this.battle.planes.filter((q) => q.team === this.team && !q.isPlayer && q.alive && q.role !== 'parked').length;
     if (p?.alive && have < (n >= 4 ? 2 : 1)) this.wingmen(1, 0.55 + n * 0.04);
     const brg = p ? Math.round(((Math.atan2(at.x - p.position.x, -(at.z - p.position.z)) * 180) / Math.PI + 360) % 360) : 0;
-    this.host.notify(`Wave ${n}`, `${count} scouts inbound · bearing ${String(brg).padStart(3, '0')}°`, 4.5);
+    this.host.notify(`Wave ${n}`, `${flight.length} scouts inbound · bearing ${String(brg).padStart(3, '0')}°`, 4.5);
   }
 
   private respawnBalloon(t: Target): void {
@@ -70,8 +70,7 @@ export class QuickBattle extends Mode {
     if (!enemies && !this.clearing) {
       this.clearing = true;
       this.clearT = 6;
-      const bonus = 100 * this.wave;
-      this.score += bonus;
+      const bonus = this.award(100 * this.wave);
       this.host.cue('objective');
       this.host.notify('Sector clear', `+${bonus} · more scouts inbound`, 4);
       const p = this.player;
@@ -110,6 +109,7 @@ export class QuickBattle extends Mode {
         ['Kite balloons', String(s.balloons)],
         ['Ground targets', String(s.ground)],
         ['Gunnery', this.accuracy()],
+        ['Opponents', this.battle.level.name],
         ['Score', String(this.score)],
       ],
       remarks: remark,

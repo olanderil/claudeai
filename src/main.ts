@@ -25,6 +25,7 @@ import { Game, DEFAULT_PILOT } from './game/Game';
 import { MISSIONS, type MissionInfo } from './game/Campaign';
 import type { PlaneVisual } from './combat/PlaneVisual';
 import { warmGroundModels } from './combat/GroundModels';
+import { LEVELS } from './combat/Levels';
 
 /** Physics rate. Fixed and high enough that the aero integration stays stable. */
 const PHYSICS_HZ = 120;
@@ -1328,7 +1329,12 @@ function boot(): void {
       sfx.init();
       sfx.ui('select');
     },
+    level: (l) => {
+      game.setLevel(l);
+      panel.sync();
+    },
   });
+  game.setLevel(menus.level);
 
   // The menu icon in the corner tools: the in-flight menu, with the main menu
   // one click further — a single click never throws a sortie away.
@@ -1765,6 +1771,15 @@ function boot(): void {
     setMap: (on) => {
       showMap = on;
     },
+    levelOptions: LEVELS.map((l) => l.name),
+    getLevel: () => LEVELS.indexOf(game.level),
+    setLevel: (i) => {
+      const l = LEVELS[i] ?? LEVELS[1];
+      game.setLevel(l);
+      menus.setLevel(l);
+      if (game.state === 'playing') notify(`${l.name} opponents`, 'from the next formation', 2);
+    },
+    levelNote: () => game.level.note,
     showKeyControls: () => showHelp(),
     getSensitivity: (axis) => game.pilot[sensitivityKey(axis)],
     setSensitivity: (axis, value) => {

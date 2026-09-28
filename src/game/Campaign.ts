@@ -7,7 +7,7 @@ import { makeGroundTarget, makeZeppelin, type Target } from '../combat/Targets';
 import type { Team } from '../combat/Types';
 
 /**
- * The campaign: seven sorties across the fronts, each with its own world,
+ * The campaign: eight sorties across the fronts, each with its own world,
  * hour and weather, told from whichever side the player flies for.
  */
 
@@ -43,6 +43,7 @@ abstract class Mission extends Mode {
       ['Balloons', String(s.balloons)],
       ['Ground targets', String(s.ground)],
       ['Gunnery', this.accuracy()],
+      ['Opponents', this.battle.level.name],
       ['Score', String(this.score)],
     ];
   }
@@ -237,15 +238,18 @@ class TrenchStrafing extends Mission {
   private need = 5;
   private patrolT = 80;
   private patrol = false;
+  protected kinds = ['mgnest', 'artillery', 'lorry', 'dump'];
+  protected goal = 5;
+  protected task = 'Destroy positions along the enemy trenches';
   start(): void {
     this.spawnPlayer(true);
     this.dressAerodrome(this.home, 2);
-    this.targets = this.groundTargets(-1, ['mgnest', 'artillery', 'lorry', 'dump'], 10);
+    this.targets = this.groundTargets(-1, this.kinds, 10);
     this.groundTargets(-1, ['aagun'], 3);
-    this.need = Math.min(5, this.targets.length);
+    this.need = Math.min(this.goal, this.targets.length);
     this.wingmen(1, 0.55);
     this.objectives = [
-      { text: 'Destroy positions along the enemy trenches', progress: `0 / ${this.need}`, done: false, marker: null },
+      { text: this.task, progress: `0 / ${this.need}`, done: false, marker: null },
     ];
   }
   protected tick(dt: number): void {
@@ -442,6 +446,19 @@ class TheAce extends Mission {
   }
 }
 
+/* ------------------------------------------------------------ 8. White War */
+
+/** The guns on a high pass: strafing among the peaks, where the rock is the real danger. */
+class WhiteWar extends TrenchStrafing {
+  protected override kinds = ['artillery', 'mgnest', 'dump'];
+  protected override goal = 4;
+  protected override task = 'Silence the batteries on the pass';
+  override report(): Report {
+    return this.finish('The guns on the pass are silent, and the valley can breathe again.',
+      'The batteries on the pass fire on. The mountain kept its secrets.');
+  }
+}
+
 /* ------------------------------------------------------------------ the list */
 
 export const MISSIONS: MissionInfo[] = [
@@ -507,5 +524,14 @@ export const MISSIONS: MissionInfo[] = [
       central: 'An English ace and his flight are hunting over the Somme. Find him before he finds another of ours.',
     },
     make: (b, h, c) => new TheAce(b, h, c, MISSIONS[6]),
+  },
+  {
+    id: 'white', name: 'The White War', world: 'ALPS', seed: 8126, time: 'MORNING', weather: 'CLEAR',
+    place: { allied: 'Tonale Pass', central: 'Tonalepass' }, date: 'February 1918',
+    briefing: {
+      allied: 'Austrian batteries dug into the snow on the pass are shelling the valley. Fly up the valley, over the saddle, and silence the guns. Bombs (B) work best. Mind the walls — the rock is closer than it looks.',
+      central: 'Italian guns on the pass are shelling our positions below. Climb to the saddle and silence them — bombs (B) work best. Keep clear of the rock walls.',
+    },
+    make: (b, h, c) => new WhiteWar(b, h, c, MISSIONS[7]),
   },
 ];

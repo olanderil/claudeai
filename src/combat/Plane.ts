@@ -120,6 +120,8 @@ export class Plane {
   private wingDrop = 0;
   /** Seconds of invulnerability left after a spawn. */
   invuln = 0;
+  /** Keep the commanded angle of attack short of the stall (the recruit's aid). */
+  stallGuard = false;
   spin = 0;
   fallT = 0;
   deadT = 0;
@@ -303,7 +305,12 @@ export class Plane {
       a0 = clamp((need - T.cl0) / T.clAlpha, -0.12, T.stallAlpha * 0.8);
     }
     const alphaDown = 0.18;
-    let aCmd = inp.pitch >= 0 ? lerp(a0, T.stallAlpha * 0.96, inp.pitch) : lerp(a0, -alphaDown, -inp.pitch);
+    const aTop = T.stallAlpha * (this.stallGuard ? 0.8 : 0.96);
+    let aCmd = inp.pitch >= 0 ? lerp(a0, aTop, inp.pitch) : lerp(a0, -alphaDown, -inp.pitch);
+    // The guard runs out of patience with the stick as the airspeed runs out:
+    // 0 above ~1.45× the stall speed, 1 at it.
+    const slow = this.stallGuard && !falling ? clamp((1.45 * this.stallSpeed - speed) / (0.45 * this.stallSpeed), 0, 1) : 0;
+    if (slow > 0 && aCmd > a0) aCmd = lerp(aCmd, a0, slow);
     if (qd > 50) {
       const qs = qd * T.wingArea;
       const aMax = ((T.nMax * m * G) / qs - T.cl0) / T.clAlpha;
@@ -324,6 +331,13 @@ export class Plane {
       tx += g * this.omega.y * 0.7;
     }
     if (this.stalled && !falling) tz += this.wingDrop * 1.3 * clamp(speed / 20, 0.3, 1);
+    // The guard also noses over: when the flight path falls away under a slow
+    // machine, and before a climb can hang it on its propeller.
+    if (this.stallGuard && !falling) {
+      if (alpha > T.stallAlpha * 0.84) tx -= (alpha - T.stallAlpha * 0.84) * 30;
+      if (alpha < -T.stallAlphaNeg * 0.8) tx += (-T.stallAlphaNeg * 0.8 - alpha) * 30;
+      else if (slow > 0 && this.fwd.y > -0.1 && alpha > -T.stallAlphaNeg * 0.4) tx -= slow * (this.fwd.y + 0.1) * 1.5;
+    }
     if (falling) {
       tz = this.spin;
       tx = tx * 0.4 - 0.25;

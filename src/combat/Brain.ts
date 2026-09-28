@@ -48,6 +48,8 @@ const _t2 = new THREE.Vector3();
 const _t3 = new THREE.Vector3();
 
 const STALL_MARGIN = 1.25;
+/** Seconds ahead along the flight path that the terrain is checked. */
+const LOOK_AHEAD = [1.5, 3, 5, 8, 12];
 
 export class Brain {
   target: Plane | null = null;
@@ -61,6 +63,8 @@ export class Brain {
   private evadeUp = 0;
   private threatT = Math.random() * 0.4;
   private avoidT = 0;
+  /** Which way to turn away from rising ground: -1 left, 1 right, 0 straight over. */
+  private avoidSide = 0;
   private burst = 0;
   private pause = 0;
   private burstLen = 0.6;
@@ -95,12 +99,18 @@ export class Brain {
     let throttle = 1;
     this.threatT -= dt;
     if (fights && this.threatT <= 0) {
-      this.threatT = 0.4;
-      if (this.mode !== 'evade' && this.findThreat() && Math.random() < 0.3 + sk * 0.5) {
+      // Good pilots look behind them more often, see further and react more surely.
+      this.threatT = lerp(0.8, 0.2, sk);
+      const threat = this.mode !== 'evade' ? this.findThreat() : null;
+      if (threat && Math.random() < 0.12 + sk * 0.8) {
         this.mode = 'evade';
         this.modeT = 1.4 + Math.random() * 1.4;
-        this.side = Math.random() < 0.5 ? -1 : 1;
-        this.evadeUp = -0.4 + Math.random() * 0.9;
+        // The novice skids away at random; the old hand breaks into the attacker
+        // to spoil his deflection shot, and keeps it level.
+        _t1.subVectors(threat.position, p.position);
+        const into = _t1.dot(p.right) >= 0 ? 1 : -1;
+        this.side = Math.random() < sk ? into : Math.random() < 0.5 ? -1 : 1;
+        this.evadeUp = lerp(-0.4 + Math.random() * 0.9, -0.15 + Math.random() * 0.3, sk);
       }
     }
 
@@ -178,22 +188,36 @@ export class Brain {
       fire = false;
     }
 
-    // Terrain avoidance, looking ahead along the velocity vector.
-    const agl = p.position.y - w.ground(p.position.x, p.position.z);
+    // Terrain avoidance, looking ahead along the velocity vector. The far
+    // samples only count climbing, not diving: they're there to see a
+    // mountainside coming, not to spoil a strafing run.
+    const here = w.ground(p.position.x, p.position.z);
+    const agl = p.position.y - here;
     let minClear = agl;
-    for (const s of [1.5, 3, 5]) {
-      const x = p.position.x + p.velocity.x * s;
-      const y = p.position.y + p.velocity.y * s;
-      const z = p.position.z + p.velocity.z * s;
-      minClear = Math.min(minClear, y - w.ground(x, z));
-    }
+    // The steepest climb the terrain ahead asks for, m/s.
+    let need = 0;
     // Strafing means going down to the deck; everything else keeps its height.
     const floor = orders.kind === 'route' ? 160 : orders.kind === 'attack' && orders.ground ? 38 : 90;
-    if (agl < floor + 20 || minClear < floor - 20) this.avoidT = 1.6;
+    for (const s of LOOK_AHEAD) {
+      const x = p.position.x + p.velocity.x * s;
+      const z = p.position.z + p.velocity.z * s;
+      const vy = s > 5 ? Math.max(p.velocity.y, 0) : p.velocity.y;
+      const g = w.ground(x, z);
+      minClear = Math.min(minClear, p.position.y + vy * s - g);
+      // Only ground that actually rises counts: low over a plain, just climb.
+      if (g > here + 40) need = Math.max(need, (g + floor - p.position.y) / s);
+    }
+    if (agl < floor + 20 || minClear < floor - 20) {
+      if (this.avoidT <= 0) this.avoidSide = 0;
+      this.avoidT = 1.6;
+      // More climb than a scout has: turn for the lower ground either side.
+      if (need > 7 && agl > 40 && this.avoidSide === 0) this.avoidSide = this.clearerSide();
+    }
     if (this.avoidT > 0) {
       this.avoidT -= dt;
       _t1.set(p.fwd.x, 0, p.fwd.z).normalize();
-      dest.copy(p.position).addScaledVector(_t1, 200);
+      _t2.set(p.right.x, 0, p.right.z).normalize();
+      dest.copy(p.position).addScaledVector(_t1, 200).addScaledVector(_t2, this.avoidSide * 260);
       dest.y += 170;
       fire = false;
       throttle = 1;
@@ -205,6 +229,36 @@ export class Brain {
     this.steer(dest, dt);
     p.throttle += clamp(throttle - p.throttle, -dt * 0.8, dt * 0.8);
     p.input.fire = fire && p.alive;
+  }
+
+  /**
+   * Which way the ground falls away: probe the terrain either side of the
+   * flight path, half left and hard left, half right and hard right.
+   * Returns -1 for left, 1 for right.
+   */
+  private clearerSide(): number {
+    const p = this.p;
+    const w = this.world;
+    const sp = Math.max(p.speed, 30);
+    const h = Math.atan2(p.velocity.x, p.velocity.z);
+    let best = -Infinity;
+    let side = 1;
+    for (const sgn of [-1, 1]) {
+      let worst = Infinity;
+      for (const a of [0.7, 1.5]) {
+        // Rotating the velocity by +a turns it to the left (heading 0 = -Z).
+        const ang = h + sgn * -a;
+        for (const t of [3, 6]) {
+          const g = w.ground(p.position.x + Math.sin(ang) * sp * t, p.position.z + Math.cos(ang) * sp * t);
+          worst = Math.min(worst, p.position.y - g);
+        }
+      }
+      if (worst > best) {
+        best = worst;
+        side = sgn;
+      }
+    }
+    return side;
   }
 
   /** Non-combat behaviour. Returns the throttle wanted. */
@@ -313,7 +367,7 @@ export class Brain {
       if (!o.alive || o.team === p.team || o.type.guns === 0) continue;
       _t1.subVectors(p.position, o.position);
       const d = _t1.length();
-      if (d > 450 || d < 1) continue;
+      if (d > 280 + this.skill * 320 || d < 1) continue;
       _t1.divideScalar(d);
       if (o.fwd.dot(_t1) > 0.94 && p.fwd.dot(_t1) > -0.2) return o;
     }

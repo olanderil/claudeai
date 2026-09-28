@@ -6,6 +6,7 @@ import { Ballistics, type Round, type Shootable } from './Ballistics';
 import { Brain, type Orders } from './Brain';
 import { Effects } from './Effects';
 import { HeightCache } from './HeightCache';
+import { DEFAULT_LEVEL, type Level } from './Levels';
 import { Plane, type PlaneEvents } from './Plane';
 import { PlaneVisual } from './PlaneVisual';
 import { Target, type TargetHooks } from './Targets';
@@ -117,6 +118,10 @@ export class Battle implements PlaneEvents, TargetHooks {
   private readonly shootables: Shootable[] = [];
   /** Where the listener is, for whizzing rounds. */
   readonly ear = new THREE.Vector3();
+  /** How good the enemy is, and the aids the player gets. */
+  level: Level = DEFAULT_LEVEL;
+  /** The player's current target, for the recruit's aim assist. */
+  assistTarget: Plane | null = null;
   /** 0 by day, 1 at night: searchlight beams fade in with it. */
   night = 0;
   private readonly beams = new Map<Target, THREE.Mesh>();
@@ -187,9 +192,12 @@ export class Battle implements PlaneEvents, TargetHooks {
     if (o.isPlayer) {
       this.player = p;
       p.invuln = 3;
+      p.stallGuard = this.level.stallGuard;
     }
     if (o.skill !== undefined) {
-      const brain = new Brain(p, o.skill, this);
+      // Sorties are tuned for the Pilot level; the chosen level rescales the enemy.
+      const skill = team !== this.homeTeam && !o.isPlayer ? this.level.skill(o.skill) : o.skill;
+      const brain = new Brain(p, skill, this);
       if (o.orders) brain.orders = o.orders;
       p.brain = brain;
     }
@@ -299,7 +307,7 @@ export class Battle implements PlaneEvents, TargetHooks {
 
   private strike(target: Shootable, r: Round, point: THREE.Vector3): void {
     if (r.owner?.isPlayer) this.stats.hits++;
-    if (target instanceof Plane) target.damage(r.damage, r.owner, point, this, this.time);
+    if (target instanceof Plane) target.damage(target === this.player ? r.damage * this.level.hurt : r.damage, r.owner, point, this, this.time);
     else if (target instanceof Target) target.damage(r.damage, r.owner, point, this);
   }
 
@@ -322,12 +330,18 @@ export class Battle implements PlaneEvents, TargetHooks {
       return;
     }
     g.cooldown -= dt;
+    const forgiving = p.isPlayer && this.level.noJams;
     while (g.cooldown <= 0) {
+      if (forgiving && g.heat > 0.97) {
+        // Hot guns just slow to the rate they can cool at.
+        g.cooldown = 0;
+        break;
+      }
       g.cooldown += 1 / p.type.rateOfFire;
       this.fireRound(p);
       g.ammo--;
       g.heat += 0.036;
-      if (g.heat >= 1 || (g.heat > 0.75 && Math.random() < 0.004)) {
+      if (!forgiving && (g.heat >= 1 || (g.heat > 0.75 && Math.random() < 0.004))) {
         g.jam = 2.6;
         if (p.isPlayer) {
           this.listener.gunsJammed?.(p);
@@ -352,11 +366,31 @@ export class Battle implements PlaneEvents, TargetHooks {
     _aim.y += (Math.random() - 0.5) * spread * 2;
     _aim.z += (Math.random() - 0.5) * spread * 2;
     _aim.normalize();
+    if (p.isPlayer && this.level.aimAssist > 0) this.assistAim(p);
     const damage = p.isPlayer ? p.type.damage : p.team === this.player?.team ? 5 : 4.2;
     this.ballistics.fire(_mz, _aim, p.velocity, p, p.team, damage, p.gun.side === 0 || !p.isPlayer);
     if (p.isPlayer) this.stats.rounds++;
     if (v) v.firingT = 0.08;
     if (Math.random() < 0.25) this.fx.gunSmoke(_mz, p.velocity);
+  }
+
+  /**
+   * The recruit's aid: a round fired within a few degrees of the lead on the
+   * current target is bent part of the way onto it.
+   */
+  private assistAim(p: Plane): void {
+    const t = this.assistTarget;
+    if (!t || !t.alive || t.team === p.team) return;
+    const d = t.position.distanceTo(_mz);
+    if (d > 650) return;
+    const tof = d / BULLET_SPEED;
+    _t1.copy(t.position).addScaledVector(_rel.subVectors(t.velocity, p.velocity), tof);
+    _t1.y += 0.5 * BULLET_GRAVITY * tof * tof;
+    _t1.sub(_mz).normalize();
+    const off = Math.acos(clamp(_t1.dot(_aim), -1, 1));
+    const cone = 0.045;
+    if (off > cone) return;
+    _aim.lerp(_t1, this.level.aimAssist * (1 - off / cone) ** 0.5).normalize();
   }
 
   /** Rear gunner in two-seaters and bombers: swings onto whatever's behind and fires in bursts. */
@@ -435,7 +469,7 @@ export class Battle implements PlaneEvents, TargetHooks {
         // A 77 mm shell with a time fuse: aim at where the target will be, badly.
         t.cooldown = rand(2.2, 4);
         const tof = bd / 520;
-        const err = 30 + bd * 0.045;
+        const err = (30 + bd * 0.045) * (t.team !== this.homeTeam ? this.level.flak : 1);
         _t1.copy(best.position).addScaledVector(best.velocity, tof * rand(0.7, 1.2)).add(randDir(_t2).multiplyScalar(rand(0.2, 1) * err));
         this.flakBurst(_t1, t.team);
       } else {
@@ -462,7 +496,7 @@ export class Battle implements PlaneEvents, TargetHooks {
         _t1.copy(best.position).addScaledVector(best.velocity, tof);
         _t1.y += 0.5 * BULLET_GRAVITY * tof * tof;
         _aim.subVectors(_t1, _mz).normalize();
-        const err = 0.018;
+        const err = 0.018 * (t.team !== this.homeTeam ? Math.sqrt(this.level.flak) : 1);
         _aim.x += (Math.random() - 0.5) * err * 2;
         _aim.y += (Math.random() - 0.5) * err * 2;
         _aim.z += (Math.random() - 0.5) * err * 2;
@@ -483,7 +517,7 @@ export class Battle implements PlaneEvents, TargetHooks {
       this.flakT -= dt;
       if (this.flakT <= 0) {
         this.flakT = rand(0.8, 2.1);
-        const err = lerp(170, 45, clamp(this.overLinesT / 45, 0, 1));
+        const err = lerp(170, 45, clamp(this.overLinesT / 45, 0, 1)) * this.level.flak;
         _t1.copy(p.position).addScaledVector(p.velocity, rand(0.4, 1.6));
         randDir(_t2).multiplyScalar(rand(0.3, 1) * err);
         _t1.add(_t2);
@@ -505,7 +539,7 @@ export class Battle implements PlaneEvents, TargetHooks {
     for (const q of this.planes) {
       if (!q.alive || q.team === byTeam) continue;
       const d = pos.distanceTo(q.position);
-      if (d < 26) q.damage(14 * (1 - d / 26), null, q.position, this, this.time);
+      if (d < 26) q.damage(14 * (1 - d / 26) * (q === pl ? this.level.hurt : 1), null, q.position, this, this.time);
     }
   }
 

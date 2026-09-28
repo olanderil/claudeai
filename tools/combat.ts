@@ -71,15 +71,15 @@ for (const id of Object.keys(TYPES) as AirframeId[]) {
 
 /* -------------------------------------------------------------- dogfight */
 
-function arena(): { planes: Plane[]; world: BrainWorld; guns: Ballistics; events: PlaneEvents; stats: { kills: number; hits: number; rounds: number; crashes: number } } {
+function arena(g: (x: number, z: number) => number = ground): { planes: Plane[]; world: BrainWorld; guns: Ballistics; events: PlaneEvents; stats: { kills: number; hits: number; rounds: number; crashes: number; unshot: number } } {
   const planes: Plane[] = [];
-  const stats = { kills: 0, hits: 0, rounds: 0, crashes: 0 };
+  const stats = { kills: 0, hits: 0, rounds: 0, crashes: 0, unshot: 0 };
   const world: BrainWorld = {
-    planes, time: 0, ground, arenaCentre: new THREE.Vector3(0, 0, 0), arenaRadius: 5000,
+    planes, time: 0, ground: g, arenaCentre: new THREE.Vector3(0, 0, 0), arenaRadius: 5000,
   };
   const events: PlaneEvents = {
     hit() { stats.hits++; },
-    killed(_p, k) { if (k) stats.kills++; },
+    killed(_p, k) { if (k) stats.kills++; else stats.unshot++; },
     exploded(_p, midAir) { if (!midAir) stats.crashes++; },
     landed() {},
   };
@@ -94,7 +94,7 @@ function stepArena(a: ReturnType<typeof arena>, seconds: number): void {
     for (const p of a.planes) {
       if (p.state === 'dead') continue;
       if (p.brain && p.alive) p.brain.update(DT);
-      p.step(DT, ground, water, a.events, t);
+      p.step(DT, a.world.ground, water, a.events, t);
       // Guns, as the battle fires them.
       const g = p.gun;
       g.heat = Math.max(0, g.heat - DT * 0.28);
@@ -112,7 +112,7 @@ function stepArena(a: ReturnType<typeof arena>, seconds: number): void {
       }
     }
     const targets: Shootable[] = a.planes.filter((p) => p.alive);
-    a.guns.step(DT, targets, ground, water, null, {
+    a.guns.step(DT, targets, a.world.ground, water, null, {
       strike: (target, r, point) => (target as Plane).damage(r.damage, r.owner, point, a.events, t),
       impact() {},
       whiz() {},
@@ -143,6 +143,33 @@ console.log('\nDogfight: 3 Camels v 3 Albatros/Dr.I, AI skill 0.6, 150 s:');
   check(a.stats.crashes <= 2, 'few machines fly into the ground unshot');
 }
 
+console.log('\nMountain dogfight: the same fight in an alpine valley over a 2,000 m pass, 150 s:');
+{
+  // A valley along z between 3,500 m walls, crossed by a saddle at z = 0.
+  const smooth = (a: number, b: number, v: number): number => {
+    const t = Math.min(1, Math.max(0, (v - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  };
+  const alps = (x: number, z: number): number =>
+    700 + 2800 * smooth(700, 2000, Math.abs(x + 200 * Math.sin(z / 900)))
+    + 1300 * Math.exp(-((z / 600) ** 2)) * (0.75 + 0.25 * Math.sin(x / 260))
+    + 120 * Math.sin(x / 170) * Math.cos(z / 230);
+  const a = arena(alps);
+  const types: AirframeId[][] = [['camel', 'camel', 'spad'], ['albatros', 'dr1', 'albatros']];
+  types.forEach((list, side) => list.forEach((id, i) => {
+    const p = new Plane(id, side === 0 ? 'allied' : 'central');
+    boxes(p);
+    const z = side === 0 ? 1500 : -1500;
+    p.spawnAt((i - 1) * 80, 2300 + i * 20, z, side === 0 ? 0 : Math.PI, 45);
+    p.brain = new Brain(p, 0.6, a.world);
+    a.planes.push(p);
+  }));
+  stepArena(a, 150);
+  console.log(`  rounds ${a.stats.rounds}, hits ${a.stats.hits}, shot down ${a.stats.kills}, flew into the ground ${a.stats.unshot}`);
+  check(a.stats.rounds > 200, 'they still fight between the walls');
+  check(a.stats.unshot <= 1, 'nobody flies into a mountain unshot');
+}
+
 console.log('\nBomber holds its route:');
 {
   const a = arena();
@@ -160,6 +187,27 @@ console.log('\nBomber holds its route:');
   console.log(`  waypoint ${reached} of ${route.length - 1}, alt ${b.position.y.toFixed(0)} m, speed ${(b.speed * 3.6).toFixed(0)} km/h`);
   check(b.alive && reached >= 2, 'reaches its waypoints alive');
   check(Math.abs(b.position.y - 800) < 250, 'keeps roughly its height');
+}
+
+console.log('\nRecruit stall guard: full back stick at low throttle, 30 s:');
+{
+  for (const guard of [false, true]) {
+    const p = new Plane('camel', 'allied');
+    boxes(p);
+    p.stallGuard = guard;
+    p.spawnAt(0, 1500, 0, 0, 40);
+    p.throttle = p.rpm = 0.3;
+    let stalledT = 0;
+    for (let t = 0; t < 30; t += DT) {
+      p.input.pitch = 1;
+      p.input.roll = 0;
+      p.step(DT, ground, water, quiet, t);
+      if (p.stalled) stalledT += DT;
+    }
+    console.log(`  ${guard ? 'guarded  ' : 'unguarded'}: stalled ${stalledT.toFixed(1)} s of 30`);
+    if (guard) check(stalledT < 0.5, 'the guarded machine never stalls');
+    else check(stalledT > 1, 'without the guard, it does');
+  }
 }
 
 console.log('\nParked scout scrambles:');

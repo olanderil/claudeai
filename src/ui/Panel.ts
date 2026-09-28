@@ -79,6 +79,12 @@ export interface PanelApi {
 
   getMap(): boolean;
   setMap(on: boolean): void;
+
+  /** The opponents' level. */
+  levelOptions: string[];
+  getLevel(): number;
+  setLevel(index: number): void;
+  levelNote(): string;
   showKeyControls(): void;
 
   getSensitivity(axis: 'pitch' | 'roll' | 'rudder'): number;
@@ -373,6 +379,24 @@ export class Panel {
         + '— easier on a keyboard. Q and E still work on their own.'),
     );
     columns[1].appendChild(mode);
+
+    const foe = this.group('Opponents');
+    foe.appendChild(
+      this.segmented(
+        this.api.levelOptions,
+        () => this.api.getLevel(),
+        (i) => {
+          this.api.setLevel(i);
+          this.sync();
+        },
+      ),
+    );
+    const foeNote = this.note(this.api.levelNote());
+    this.refreshers.push(() => {
+      foeNote.textContent = this.api.levelNote();
+    });
+    foe.appendChild(foeNote);
+    columns[0].appendChild(foe);
 
     const display = this.group('Display');
     display.appendChild(
